@@ -10,7 +10,7 @@ The ae_to_spine.jsx script exports a lot of animation data from After Effects, b
 * Image layers
 * PNG sequence layers
 * Layer hierarchy (parenting)
-* Translation, rotation, scale, opacity keyframes
+* Translation, rotation, scale, opacity keyframes (as linear)
 * Composition layers (nested compositions)
 * Per-layer in-point and out-point (visibility)
 * Time remapping
@@ -19,6 +19,7 @@ The ae_to_spine.jsx script exports a lot of animation data from After Effects, b
 Things that are not supported:
 
 * Warp effects, puppet animation, etc. (no deformation)
+* Glows, shadows, etc. (no effects)
 * Masks of any kind
 * Color transformations of any kind
 * Plugin effects, like particles, etc.
@@ -26,6 +27,8 @@ Things that are not supported:
 Some of these limitations are easier to work around than others.  For example, if you are warping an image, consider rendering out the warping animation to a PNG sequence and using that as a layer.
 
 For particle effects, render those out as a separate PNG sequence as well.  Use a lower resolution if you can to save texture space.
+
+Same goes for glows, shadows, and other effects. They can be rendered out, added as another layer, and faded in and out using opacity, often at lower resolution.
 
 Photoshop Export with psd_to_spine.jsx
 -------------------------
