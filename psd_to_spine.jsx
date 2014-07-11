@@ -73,10 +73,12 @@ function boneRelativeCoordinates( spineData ) {
 		if (childBones.length > 0) {
 			var bounds = getBounds( spineData, childBones, bone["name"] );
 			if (bounds != null) {
-//alert(bone["name"]+"\n\n"+JSON.stringify(bone,null,"\t")+"\n\n"+JSON.stringify(bounds,null,"\t"));
-				bone["x"] = bounds["x"];
-				bone["y"] = bounds["y"];
-				moveBones( childBones, -bounds["x"], -bounds["y"] );
+//if (bone["name"]=="root") alert(bone["name"]+"\n\n"+JSON.stringify(bone,null,"\t")+"\n\n"+JSON.stringify(bounds,null,"\t"));
+				var x = bounds["x"] + (bounds["width"]/2);
+				var y = bounds["y"] + (bounds["height"]/2);
+				bone["x"] = x;
+				bone["y"] = y;
+				moveBones( childBones, -x, -y );
 			}
 		}
 	}
@@ -120,6 +122,17 @@ function getImage( spineData, boneName ) {
 		}
 	}
 	return data;
+}
+
+function getBone( spineData, boneName ) {
+	var numBones = spineData["bones"].length;
+	for (var i=0; i<numBones; i++) {
+		var bone = spineData["bones"][i];
+		if (bone["name"] == boneName) {
+			return bone;
+		}
+	}
+	return null;
 }
 
 function getBounds( spineData, bones, parentName ) {
@@ -252,7 +265,9 @@ function processLayers(doc, docFileName) {
 	var spineData = {
 		"bones": [
 			{
-				"name": "root"
+				"name": "root",
+				"x": 0,
+				"y": 0
 			}
 		],
 		"slots": [],
@@ -266,6 +281,8 @@ function processLayers(doc, docFileName) {
 	processLayers.traverse(spineData, doc, doc.layers, docFileName, "root");
 	boneRelativeCoordinates( spineData );
 	scaleBones( spineData["bones"], 1, -1 );
+	delete spineData["bones"][0]["x"];	// Center the root at (0,0)
+	delete spineData["bones"][0]["y"];
 	return spineData
 };
 
