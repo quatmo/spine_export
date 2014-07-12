@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 14
+	Version 15
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -693,11 +693,23 @@
 					numKeys = layer.transform.position.length;
 					for (var j=0; j<numKeys; j++) {
 						frame = layer.transform.position[j][0];
-						translateTimeline.push({
+						var keyData =  {
 							"time": frame * frameDuration,
 							"x": (layer.transform.position[j][1][0] - layer.transform.position[0][1][0]) * this.rootScale,
 							"y":-(layer.transform.position[j][1][1] - layer.transform.position[0][1][1]) * this.rootScale
-						});
+						};
+						var tangentType = layer.transform.position[j][2];
+						if (tangentType == "hold") {
+							keyData["curve"] = "stepped";
+						// } else if (tangentType == "bezier" && j < numKeys-1) {
+						// 	keyData["curve"] = [
+						// 		layer.transform.position[j][3]["influence"] / 100.0,
+						// 		layer.transform.position[j][3]["speed"] / 100.0,
+						// 		1.0 - (layer.transform.position[j][4]["influence"] / 100.0),
+						// 		1.0 - (layer.transform.position[j][4]["speed"] / 100.0)
+						// 	];
+						}
+						translateTimeline.push( keyData );
 					}
 					if (!boneAnimData[boneName]) boneAnimData[boneName] = {};
 					boneAnimData[boneName]["translate"] = translateTimeline;
@@ -707,11 +719,16 @@
 					numKeys = layer.transform.scale.length;
 					for (var j=0; j<numKeys; j++) {
 						frame = layer.transform.scale[j][0];
-						scaleTimeline.push({
+						var keyData = {
 							"time": frame * frameDuration,
 							"x": layer.transform.scale[j][1][0] / 100.0,
 							"y": layer.transform.scale[j][1][1] / 100.0
-						});
+						};
+						var tangentType = layer.transform.scale[j][2];
+						if (tangentType == "hold") {
+							keyData["curve"] = "stepped";
+						}
+						scaleTimeline.push( keyData );
 					}
 					if (!boneAnimData[boneName]) boneAnimData[boneName] = {};
 					boneAnimData[boneName]["scale"] = scaleTimeline;
@@ -722,6 +739,7 @@
 					var lastValue = 360 - layer.transform.rotation[0][1];
 					var lastTime = layer.transform.rotation[0][0] * frameDuration;
 					for (var j=0; j<numKeys; j++) {
+						var tangentType = layer.transform.rotation[j][2];
 						var time = layer.transform.rotation[j][0] * frameDuration;
 						var value = 360 - layer.transform.rotation[j][1];
 						var delta = value - lastValue;
@@ -729,10 +747,14 @@
 						var dt = (time - lastTime) / steps;
 						delta /= steps;
 						for (var k=1; k<=steps; k++) {
-							rotateTimeline.push({
+							var keyData = {
 								"time": lastTime + (dt * k),
 								"angle": (lastValue + (delta * k)) % 360
-							});
+							};
+							if (tangentType == "hold") {
+								keyData["curve"] = "stepped";
+							}
+							rotateTimeline.push( keyData );
 						}
 						lastValue = value;
 						lastTime = time;
@@ -896,7 +918,7 @@
 	}
 
 	BaseObject.prototype.setPropValues = function(prop){
-		var frameRate, duration, timeValues, firstKey, firstKeyTime, 
+		var frameRate, duration, timeValues, firstKey, firstKeyTime, interpolation,
 				lastKey, lastKeyTime, time, startFrame, endFrame, frame, propVal, times, props;
 
 		duration      = this.compSettings.duration;
@@ -910,7 +932,20 @@
 				for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++){
 					frame = prop.keyTime(keyIndex) / frameDuration;
 					propVal = prop.keyValue(keyIndex);
-					timeValues.push([frame, propVal]);
+					var keyData = [frame, propVal];
+					interpolation = prop.keyOutInterpolationType(keyIndex);
+					if (interpolation == KeyframeInterpolationType.LINEAR) {
+						keyData.push("linear");
+					} else if (interpolation == KeyframeInterpolationType.HOLD) {
+						keyData.push("hold");
+					} else if (interpolation == KeyframeInterpolationType.BEZIER) {
+						keyData.push("bezier");
+						var easeIn = prop.keyInTemporalEase(keyIndex);
+						keyData.push(easeIn[0]);
+						var easeOut = prop.keyOutTemporalEase(keyIndex);
+						keyData.push(easeOut[0]);
+					}
+					timeValues.push(keyData);
 				}
 			} else {
 				propVal = prop.value;
