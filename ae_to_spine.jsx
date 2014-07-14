@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 15
+	Version 16
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -25,6 +25,22 @@
 		}
 		return undefined;
 	}
+
+	function sqr(x) { return x * x; }
+	function dist2(v, w) { return sqr(v[0] - w[0]) + sqr(v[1] - w[1]); }
+	function dist(v, w) { return Math.sqrt(sqr(v[0] - w[0]) + sqr(v[1] - w[1])); }
+	function distToSegmentSquared(p, v, w) {
+		var l2 = dist2(v, w);
+		if (l2 == 0) return dist2(p, v);
+		var t = ((p[0] - v[0]) * (w[0] - v[0]) + (p[1] - v[1]) * (w[1] - v[1])) / l2;
+		if (t < 0) return dist2(p, v);
+		if (t > 1) return dist2(p, w);
+		return dist2(p, [
+			v[0] + t * (w[0] - v[0]),
+			v[1] + t * (w[1] - v[1])
+		]);
+	}
+	function distToSegment(p, v, w) { return Math.sqrt(distToSegmentSquared(p, v, w)); }
 
 	function AE2JSON(thisObj,saveToFile) {
 		if (app.project.file == null) {
@@ -366,6 +382,7 @@
 		this.rootScale = 1.0;
 		this.rootX = 0.0;
 		this.rootY = 0.0;
+//alert(JSON.stringify(layers[0].transform.position)); 
 		while( boneGenerated.length <= numLayers ) {
 			for (var i=0; i<numLayers; i++) {
 				var layer = layers[i];
@@ -394,10 +411,6 @@
 					if (parentIndex > 0) {
 						parent = layers[parentIndex-1];
 						parentName = this.makeSpineBoneName( parent );
-						// var psx = (parent.transform.scale[0][1][0] / 100.0);
-						// var psy = (parent.transform.scale[0][1][1] / 100.0);
-						// parentWidth = parent.width * psx;
-						// parentHeight = parent.height * psy;
 						parentOffsetX = -parent.transform.anchorPoint[0][1][0];
 						parentOffsetY = parent.transform.anchorPoint[0][1][1];
 					} else if (layer.comp) {
@@ -701,13 +714,13 @@
 						var tangentType = layer.transform.position[j][2];
 						if (tangentType == "hold") {
 							keyData["curve"] = "stepped";
-						// } else if (tangentType == "bezier" && j < numKeys-1) {
-						// 	keyData["curve"] = [
-						// 		layer.transform.position[j][3]["influence"] / 100.0,
-						// 		layer.transform.position[j][3]["speed"] / 100.0,
-						// 		1.0 - (layer.transform.position[j][4]["influence"] / 100.0),
-						// 		1.0 - (layer.transform.position[j][4]["speed"] / 100.0)
-						// 	];
+						} else if (tangentType == "bezier" && j < numKeys-1) {
+							keyData["curve"] = [
+								layer.transform.position[j][3][0],
+								layer.transform.position[j][3][1],
+								layer.transform.position[j][4][0],
+								layer.transform.position[j][4][1]
+							];
 						}
 						translateTimeline.push( keyData );
 					}
@@ -918,50 +931,83 @@
 	}
 
 	BaseObject.prototype.setPropValues = function(prop){
-		var frameRate, duration, timeValues, firstKey, firstKeyTime, interpolation,
-				lastKey, lastKeyTime, time, startFrame, endFrame, frame, propVal, times, props;
+		var duration = this.compSettings.duration;
+		var frameDuration = this.compSettings.frameDuration;
+		var frameRate = this.compSettings.frameRate;
+		var timeSampleRate = 1.0/(frameRate*1);	//1.0/60.0;
+		var tollerance = 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes
 
-		duration      = this.compSettings.duration;
-		frameDuration = this.compSettings.frameDuration;
-		frameRate     = this.compSettings.frameRate;
-
-		timeValues = new Array();
-		var useKeyframes = true
-		if (useKeyframes) {
-			if(prop.numKeys > 1){
-				for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++){
-					frame = prop.keyTime(keyIndex) / frameDuration;
-					propVal = prop.keyValue(keyIndex);
-					var keyData = [frame, propVal];
-					interpolation = prop.keyOutInterpolationType(keyIndex);
-					if (interpolation == KeyframeInterpolationType.LINEAR) {
-						keyData.push("linear");
-					} else if (interpolation == KeyframeInterpolationType.HOLD) {
-						keyData.push("hold");
-					} else if (interpolation == KeyframeInterpolationType.BEZIER) {
-						keyData.push("bezier");
-						var easeIn = prop.keyInTemporalEase(keyIndex);
-						keyData.push(easeIn[0]);
-						var easeOut = prop.keyOutTemporalEase(keyIndex);
-						keyData.push(easeOut[0]);
-					}
+		var timeValues = new Array();
+		if(prop.numKeys > 1){
+			for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++){
+				var keyTime = prop.keyTime(keyIndex);
+				var frame = keyTime / frameDuration;
+				var propVal = prop.keyValue(keyIndex);
+				var interpolation = prop.keyOutInterpolationType(keyIndex);
+				var keyData = [frame, propVal];
+				if (interpolation == KeyframeInterpolationType.HOLD) {
+					keyData.push("hold");
 					timeValues.push(keyData);
+				} else {
+					if (prop.isSpatial) {
+						keyData.push("linear");
+						timeValues.push(keyData);
+						if (keyIndex <= prop.numKeys-1) {
+							var nextPropVal = prop.keyValue(keyIndex+1);
+							var nextKeyTime = prop.keyTime(keyIndex+1);
+							var distance = dist( propVal, nextPropVal );
+							var steps = (nextKeyTime - keyTime) / timeSampleRate;
+							var dx = (nextPropVal[0] - propVal[0]) / steps;
+							var dy = (nextPropVal[1] - propVal[1]) / steps;
+							propVal = propVal.slice(0);	//clone
+							var time = keyTime;
+							for ( var i=1; i<steps; i++ ) {
+								time+=timeSampleRate;
+								propVal[0] += dx;
+								propVal[1] += dy;
+								var interVal = prop.valueAtTime(time, true);
+								var interDist = dist( interVal, propVal );
+								var intollerable = (interDist > distance*tollerance);
+								if (intollerable) {
+									propVal = interVal.slice(0);	//clone
+									//distance = dist( propVal, nextPropVal );
+									dx = (nextPropVal[0] - propVal[0]) / (steps-i);
+									dy = (nextPropVal[1] - propVal[1]) / (steps-i);
+									keyData = [time/frameDuration, propVal.slice(0), "linear"];
+									timeValues.push(keyData);
+								}
+							}
+						}
+					} else {
+						if (interpolation == KeyframeInterpolationType.LINEAR) {
+							keyData.push("linear");
+						} else if (interpolation == KeyframeInterpolationType.BEZIER) {
+							keyData.push("linear");
+							// keyData.push("bezier");
+							// var easeIn = prop.keyInSpatialEase(keyIndex);
+							// keyData.push(easeIn[0]);
+							// var easeOut = prop.keyOutSpatialEase(keyIndex);
+							// keyData.push(easeOut[0]);
+						}
+						timeValues.push(keyData);
+					}
 				}
-			} else {
-				propVal = prop.value;
-				timeValues.push([0, propVal]);
 			}
 		} else {
-			startFrame = 0; //Number(timeToCurrentFormat(firstKeyTime, frameRate));
-			endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
-
-			for(frame = startFrame; frame <= endFrame; frame++){
-				time = frame * frameDuration;
-				propVal = prop.valueAtTime(time, false);
-				timeValues.push([frame, propVal]);
-				//timeValues.push([time, propVal]);
-			}
+			timeValues.push([0, prop.value, "hold"]);
 		}
+
+		// } else {
+		// 	startFrame = 0; //Number(timeToCurrentFormat(firstKeyTime, frameRate));
+		// 	endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
+
+		// 	for(frame = startFrame; frame <= endFrame; frame++){
+		// 		time = frame * frameDuration;
+		// 		propVal = prop.valueAtTime(time, false);
+		// 		timeValues.push([frame, propVal]);
+		// 		//timeValues.push([time, propVal]);
+		// 	}
+		// }
 		
 		return timeValues;
 	}
