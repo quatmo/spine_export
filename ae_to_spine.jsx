@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 16
+	Version 17
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -87,15 +87,17 @@
 				var compName = this.jsonData.bones[i]["comp"];
 				var compData = this.compData[ compName ]
 				var compInPoint = this.jsonData.bones[i]["inPoint"];
-				this.copyCompData(this.jsonData.bones[i],compName,compData,compInPoint);
+				var compAnchorPoint = this.jsonData.bones[i]["anchorPoint"];
+				this.copyCompData(this.jsonData.bones[i],compName,compData,compInPoint,compAnchorPoint);
 				delete this.jsonData.bones[i]["comp"];
 				delete this.jsonData.bones[i]["inPoint"];
+				delete this.jsonData.bones[i]["anchorPoint"];
 			}
 			i++;
 		}
 	}
 
-	AE2JSON.prototype.copyCompData = function(parentBone,compName,compData,compInPoint){
+	AE2JSON.prototype.copyCompData = function(parentBone,compName,compData,compInPoint,compAnchorPoint){
 		// Make a copy first
 		compData = JSON.parse(JSON.stringify(compData));
 		//
@@ -110,6 +112,8 @@
 					newBoneData[prop] = boneData[prop];
 				}
 				if (newBoneData.parent == "root") {
+					newBoneData["x"] -= compAnchorPoint[0];
+					newBoneData["y"] += compAnchorPoint[1];
 					newBoneData.parent = parentBone.name;
 				} else {
 					newBoneData.parent = parentBone.name+"_"+newBoneData.parent;
@@ -413,9 +417,6 @@
 						parentName = this.makeSpineBoneName( parent );
 						parentOffsetX = -parent.transform.anchorPoint[0][1][0];
 						parentOffsetY = parent.transform.anchorPoint[0][1][1];
-					} else if (layer.comp) {
-						parentOffsetX = -layer.transform.anchorPoint[0][1][0];
-						parentOffsetY = layer.transform.anchorPoint[0][1][1];
 					} else {
 						parentOffsetX = -this.rootX;
 						parentOffsetY = this.rootY;
@@ -429,6 +430,10 @@
 					if (layer.comp) {
 						boneData["comp"] = layer.comp;
 						boneData["inPoint"] = layer.inPoint;
+						boneData["anchorPoint"] = [
+							layer.transform.anchorPoint[0][1][0],
+							layer.transform.anchorPoint[0][1][1]
+						]
 					}
 					if (layer.transform.scale.length <= 1) {
 						if (Math.round(sx*10000) != 10000) {
