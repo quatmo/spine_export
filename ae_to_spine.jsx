@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 17
+	Version 18
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -84,11 +84,16 @@
 		var i=0;
 		while (i < this.jsonData.bones.length) {
 			if (this.jsonData.bones[i].comp) {
+				var boneName = this.jsonData.bones[i]["name"];
 				var compName = this.jsonData.bones[i]["comp"];
 				var compData = this.compData[ compName ]
 				var compInPoint = this.jsonData.bones[i]["inPoint"];
 				var compAnchorPoint = this.jsonData.bones[i]["anchorPoint"];
-				this.copyCompData(this.jsonData.bones[i],compName,compData,compInPoint,compAnchorPoint);
+				var animations = this.jsonData["animations"];
+				this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animations);
+				if (animations["animation"]["slots"][boneName]) {
+					delete animations["animation"]["slots"][boneName];
+				}
 				delete this.jsonData.bones[i]["comp"];
 				delete this.jsonData.bones[i]["inPoint"];
 				delete this.jsonData.bones[i]["anchorPoint"];
@@ -97,7 +102,7 @@
 		}
 	}
 
-	AE2JSON.prototype.copyCompData = function(parentBone,compName,compData,compInPoint,compAnchorPoint){
+	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimations){
 		// Make a copy first
 		compData = JSON.parse(JSON.stringify(compData));
 		//
@@ -114,32 +119,32 @@
 				if (newBoneData.parent == "root") {
 					newBoneData["x"] -= compAnchorPoint[0];
 					newBoneData["y"] += compAnchorPoint[1];
-					newBoneData.parent = parentBone.name;
+					newBoneData.parent = parentBoneName;
 				} else {
-					newBoneData.parent = parentBone.name+"_"+newBoneData.parent;
+					newBoneData.parent = parentBoneName+"_"+newBoneData.parent;
 				}
-				newBoneData.name = parentBone.name+"_"+newBoneData.name;
+				newBoneData.name = parentBoneName+"_"+newBoneData.name;
 				this.jsonData.bones.push(newBoneData);
 			}
 		}
 		//
 		// Copy slots
 		//
-		var index = 0;
-		while (index < this.jsonData.slots.length) {
-			if (this.jsonData.slots[index]["comp"] == parentBone.name) {
+		var slotStartingIndex = 0;
+		while (slotStartingIndex < this.jsonData.slots.length) {
+			if (this.jsonData.slots[slotStartingIndex]["comp"] == parentBoneName) {
 				break;
 			}
-			index++;
+			slotStartingIndex++;
 		}
 		var numSlots = compData.slots.length;
 		for (var i=0; i<numSlots; i++) {
 			var slotData = compData.slots[i];
-			var name = slotData["name"]
+			var name = slotData["name"];
 			var attachment = slotData["attachment"] ? slotData["attachment"] : null;
 			var newSlotData = {
-				"name": parentBone.name+"_"+name,
-				"bone": parentBone.name+"_"+slotData["bone"],
+				"name": parentBoneName+"_"+name,
+				"bone": parentBoneName+"_"+slotData["bone"],
 				"attachment": attachment
 			};
 			if (slotData["additive"]) {
@@ -149,9 +154,9 @@
 				newSlotData["color"] = slotData["color"];
 			}
 			if (slotData["comp"]) {
-				newSlotData["comp"] = parentBone.name+"_"+slotData["comp"];
+				newSlotData["comp"] = parentBoneName+"_"+slotData["comp"];
 			}
-			this.jsonData.slots.splice(index+i,0,newSlotData);
+			this.jsonData.slots.splice(slotStartingIndex+i,0,newSlotData);
 			if (compInPoint > 0) {
 				var animData = compData.animations["animation"]["slots"][name];
 				var attachmentTimeline;
@@ -178,8 +183,8 @@
 				attachmentTimeline.splice(1,0,newAnimData);
 			}
 		}
-		if (this.jsonData.slots[index+i]["comp"]) {
-			this.jsonData.slots.splice(index+i,1);
+		if (this.jsonData.slots[slotStartingIndex+i]["comp"]) {
+			this.jsonData.slots.splice(slotStartingIndex+i,1);
 		}
 		//
 		// Copy skins
@@ -190,19 +195,46 @@
 			for (var prop in skinData) {
 				newSkinData[prop] = skinData[prop];
 			}
-			this.jsonData.skins["default"][parentBone.name+"_"+name] = newSkinData;
+			this.jsonData.skins["default"][parentBoneName+"_"+name] = newSkinData;
 		}
 		//
-		// Copy animations
+		// Copy slot animations
 		//
+		var colorAnimation = compAnimations["animation"]["slots"][parentBoneName] && compAnimations["animation"]["slots"][parentBoneName].hasOwnProperty("color") ? compAnimations["animation"]["slots"][parentBoneName]["color"] : null;
 		for (var name in compData.animations["animation"]["slots"]) {
 			var animData = compData.animations["animation"]["slots"][name];
-			this.jsonData.animations["animation"]["slots"][parentBone.name+"_"+name] = animData;
+			this.jsonData.animations["animation"]["slots"][parentBoneName+"_"+name] = animData;
 			this.addInPoint( animData, compInPoint );
+			if (colorAnimation) {
+				if (animData.hasOwnProperty("color") == false) {
+					animData["color"] = colorAnimation;
+				}
+			}
 		}
+		// Duplicate any color animation onto every slot in the nested comp that doesn't have some already
+		if (colorAnimation) {
+			for (var i=0; i<numSlots; i++) {
+				var slotData = this.jsonData.slots[slotStartingIndex + i];
+				var name = slotData["name"];
+				if (!this.jsonData.animations["animation"]["slots"]) {
+					this.jsonData.animations["animation"]["slots"] = {};
+				}
+				if (!this.jsonData.animations["animation"]["slots"][name]) {
+					this.jsonData.animations["animation"]["slots"][name] = {};
+				}
+				var animData = this.jsonData.animations["animation"]["slots"][name];
+				if (!animData || !animData.hasOwnProperty("color")) {
+					//alert(name+"\n\n"+JSON.stringify(,null,"\t"));
+					this.jsonData.animations["animation"]["slots"][name]["color"] = colorAnimation;
+				}
+			}
+		}
+		//
+		// Copy bone animation data
+		//
 		for (var name in compData.animations["animation"]["bones"]) {
 			var animData = compData.animations["animation"]["bones"][name];
-			this.jsonData.animations["animation"]["bones"][parentBone.name+"_"+name] = animData;
+			this.jsonData.animations["animation"]["bones"][parentBoneName+"_"+name] = animData;
 			this.addInPoint( animData, compInPoint );
 		}
 	}
@@ -303,23 +335,23 @@
 	}
 
 
-	AE2JSON.prototype.makeSpineAttachmentNameStr = function(layerName) {
-		if (layerName == null) {
+	AE2JSON.prototype.makeSpineAttachmentNameStr = function(sourceName) {
+		if (sourceName == null) {
 			return null;
 		} else {
 			var projectName = app.project.file.name.replace(/\.aep/,'');
-			var attachmentName = layerName.replace(/([^\.]+).*/,"$1");
+			var attachmentName = sourceName.replace(/([^\.]+).*/,"$1");
 			attachmentName = attachmentName
 				.replace(/_L[0-9]+$/,'')
 				.replace(/ /g,'_')
 				.replace(/\.[A-Za-z\.]+$/,'');
-			// return layerName.replace(/([^\/]+)\/([^\.]+).*/,"$2-assets/$1").replace(/_L[0-9]+$/,'').replace(/ /g,'_');
+			// return sourceName.replace(/([^\/]+)\/([^\.]+).*/,"$2-assets/$1").replace(/_L[0-9]+$/,'').replace(/ /g,'_');
 			return projectName+"-assets/"+attachmentName;
 		}
 	}
 
 	AE2JSON.prototype.makeSpineAttachmentName = function(layer, time) {
-		var name = layer.name;
+		var name = layer.sourceName;
 		if (time != undefined && layer.files) {
 			var frame = 0;
 			if (layer.timeRemap) {
@@ -586,9 +618,9 @@
 		var compDuration = this.defaultComp.compSettings.duration;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
-			if (layer.comp) {
-				continue;
-			}
+			// if (layer.comp) {
+			// 	continue;
+			// }
 			var boneName = this.makeSpineBoneName( layer );
 			if (layer.transform.opacity.length > 1) {
 				var colorTimeline = [];
@@ -1040,6 +1072,7 @@
 
 	AV.prototype.beforeDefaults = function(compSettings, layer){
 		this.objData.layerType = "AV";
+		this.objData.sourceName = layer.source.name;
 		this.objData.width = layer.width;
 		this.objData.height = layer.height;
 		this.objData.enabled = layer.enabled;
