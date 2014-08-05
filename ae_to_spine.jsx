@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 18
+	Version 19
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -618,9 +618,6 @@
 		var compDuration = this.defaultComp.compSettings.duration;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
-			// if (layer.comp) {
-			// 	continue;
-			// }
 			var boneName = this.makeSpineBoneName( layer );
 			if (layer.transform.opacity.length > 1) {
 				var colorTimeline = [];
@@ -978,6 +975,12 @@
 		if(prop.numKeys > 1){
 			for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++){
 				var keyTime = prop.keyTime(keyIndex);
+				if (keyIndex == 1 && keyTime > 0.0) {
+					var frame = 0;
+					var propVal = prop.valueAtTime(0.0, false);
+					var keyData = [frame, propVal,"hold"];
+					timeValues.push(keyData);
+				}
 				var frame = keyTime / frameDuration;
 				var propVal = prop.keyValue(keyIndex);
 				var interpolation = prop.keyOutInterpolationType(keyIndex);
