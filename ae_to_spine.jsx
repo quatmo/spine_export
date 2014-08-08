@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 19
+	Version 20
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -49,7 +49,8 @@
 		}
 
 		this.proj = app.project;
-		this.referencedComps = [app.project.activeItem];
+		this.masterComp = app.project.activeItem;
+		this.referencedComps = [this.masterComp];
 		this.activeComp = app.project.activeItem.name;
 		this.compBones = [];
 		this.compData = {};
@@ -81,6 +82,7 @@
 	}
 
 	AE2JSON.prototype.combineComps = function(){
+		var masterDuration = this.masterComp.duration;
 		var i=0;
 		while (i < this.jsonData.bones.length) {
 			if (this.jsonData.bones[i].comp) {
@@ -90,19 +92,30 @@
 				var compInPoint = this.jsonData.bones[i]["inPoint"];
 				var compAnchorPoint = this.jsonData.bones[i]["anchorPoint"];
 				var animations = this.jsonData["animations"];
-				this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animations);
+				this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animations,masterDuration);
 				if (animations["animation"]["slots"][boneName]) {
 					delete animations["animation"]["slots"][boneName];
 				}
 				delete this.jsonData.bones[i]["comp"];
 				delete this.jsonData.bones[i]["inPoint"];
 				delete this.jsonData.bones[i]["anchorPoint"];
+			} else {
+				this.addInPointAll( this.jsonData.animations["animation"]["bones"], this.jsonData.animations["animation"]["bones"], null, 0, masterDuration );
+				this.addInPointAll( this.jsonData.animations["animation"]["slots"], this.jsonData.animations["animation"]["slots"], null, 0, masterDuration );
+			}
+			// Delete reference to layer data before output
+			delete this.jsonData.bones[i]["layer"];
+			for (var name in this.jsonData.animations["animation"]["bones"]) {
+				delete this.jsonData.animations["animation"]["bones"][name]["layer"];
+			}
+			for (var name in this.jsonData.animations["animation"]["slots"]) {
+				delete this.jsonData.animations["animation"]["slots"][name]["layer"];
 			}
 			i++;
 		}
 	}
 
-	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimations){
+	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimations,masterDuration){
 		// Make a copy first
 		compData = JSON.parse(JSON.stringify(compData));
 		//
@@ -200,15 +213,11 @@
 		//
 		// Copy slot animations
 		//
+		this.addInPointAll( compData.animations["animation"]["slots"], this.jsonData.animations["animation"]["slots"], parentBoneName, compInPoint, masterDuration );
 		var colorAnimation = compAnimations["animation"]["slots"][parentBoneName] && compAnimations["animation"]["slots"][parentBoneName].hasOwnProperty("color") ? compAnimations["animation"]["slots"][parentBoneName]["color"] : null;
-		for (var name in compData.animations["animation"]["slots"]) {
-			var animData = compData.animations["animation"]["slots"][name];
-			this.jsonData.animations["animation"]["slots"][parentBoneName+"_"+name] = animData;
-			this.addInPoint( animData, compInPoint );
-			if (colorAnimation) {
-				if (animData.hasOwnProperty("color") == false) {
-					animData["color"] = colorAnimation;
-				}
+		if (colorAnimation) {
+			if (animData.hasOwnProperty("color") == false) {
+				animData["color"] = colorAnimation;
 			}
 		}
 		// Duplicate any color animation onto every slot in the nested comp that doesn't have some already
@@ -232,26 +241,186 @@
 		//
 		// Copy bone animation data
 		//
-		for (var name in compData.animations["animation"]["bones"]) {
-			var animData = compData.animations["animation"]["bones"][name];
-			this.jsonData.animations["animation"]["bones"][parentBoneName+"_"+name] = animData;
-			this.addInPoint( animData, compInPoint );
+		this.addInPointAll( compData.animations["animation"]["bones"], this.jsonData.animations["animation"]["bones"], parentBoneName, compInPoint, masterDuration );
+	}
+
+	AE2JSON.prototype.addInPointAll = function(fromAnimData,toAnimData,parentBoneName,inPoint,masterDuration){
+		for (var name in fromAnimData) {
+			var layer = fromAnimData[name]["layer"];
+			var animEntry = fromAnimData[name];
+			if (parentBoneName != null) {
+				name = parentBoneName+"_"+name;
+			}
+			toAnimData[name] = animEntry;
+			this.addInPoint( animEntry, inPoint, masterDuration, layer );
 		}
 	}
 
-	AE2JSON.prototype.addInPoint = function(animData,inPoint){
-		for (var prop in animData) {
+	AE2JSON.prototype.addInPoint = function(animEntry,inPoint,masterDuration,layer){
+		for (var prop in animEntry) {
 			if (prop == "time") {
-				animData["time"] += inPoint;
-			} else if (animData[prop] && typeof animData[prop] == "object" ) {
-				this.addInPoint( animData[prop], inPoint );
-			} else if (animData[prop] instanceof Array ) {
-				var len = animData[prop].length;
-				for (var i=0; i<len; i++) {
-					this.addInPoint( animData[prop][i], inPoint );
+				var time = animEntry["time"];
+				var newTime = time + inPoint;
+				animEntry["time"] = newTime;
+				if (newTime > masterDuration) {
+					return false;
+				}
+				break;
+			} else if (animEntry[prop] instanceof Array ) {
+				var len = animEntry[prop].length;
+				var i;
+				var splice = false;
+				for (i=0; i<len; i++) {
+					if (this.addInPoint( animEntry[prop][i], inPoint, masterDuration, layer) == false) {
+						splice = true;
+						break;
+					}
+				}
+				if (splice) {
+					this.spliceKeyframe( animEntry[prop], i, inPoint, masterDuration, layer, prop );
+				}
+			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
+				if (this.addInPoint( animEntry[prop], inPoint, masterDuration, layer) == false) {
+					return false;
 				}
 			}
 		}
+		return true;
+	}
+
+	AE2JSON.prototype.spliceKeyframe = function(animData,index,inPoint,masterDuration,layer,prop) {
+		var len = animData.length;
+		// If there's only 1 keyframe or we'll only be left with one keyframe
+		if (len == 1 || index == 0) {
+			animData[0]["time"] = masterDuration;
+			if (len > 1) {
+				animData.splice(1,len-1);
+			}
+			return;
+		}
+		var timeline;
+		var timelineIndex;
+		var newValue;
+		switch (prop) {
+			case "translate":
+				animData[index]["time"] = masterDuration;
+				timeline = layer.transform.position_timeline;
+				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
+				newValue = timeline[timelineIndex];
+				animData[index]["x"] =  (newValue[2][0] - timeline[0][2][0]);
+				animData[index]["y"] = -(newValue[2][1] - timeline[0][2][1]);
+				break;
+			case "rotate":
+				animData[index]["time"] = masterDuration;
+				timeline = layer.transform.rotation_timeline;
+				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
+				newValue = timeline[timelineIndex][2];
+				animData[index]["angle"] = (360 - newValue) % 360;
+				break;
+			case "scale":
+				animData[index]["time"] = masterDuration;
+				timeline = layer.transform.scale_timeline;
+				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
+				newValue = timeline[timelineIndex];
+				animData[index]["x"] = newValue[2][0] / 100.0;
+				animData[index]["y"] = newValue[2][1] / 100.0;
+				break;
+			case "attachment":
+				--index;	// Just delete attachment keyframes beyond the end of the master timeline
+				break;
+			case "color":
+				animData[index]["time"] = masterDuration;
+				timeline = layer.transform.opacity_timeline;
+				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
+				newValue = Math.round((timeline[timelineIndex][2] / 100.0) * 0xFF);
+				var opacityHex = ("0"+newValue.toString(16)).substr(-2);
+				animData[index]["color"] = "FFFFFF" + opacityHex;
+				break;
+		}
+		if (index < len-1) {
+			animData.splice(index+1,len-index-1);
+		}
+	}
+
+	AE2JSON.prototype.findTimelineIndex = function(timeline,time) {
+		var len = timeline.length;
+		var i;
+		for (i=0; i<len; i++) {
+			if (timeline[i][0] >= time) {
+				break;
+			}
+		}
+		return i == len ? i-1 : i;
+	}
+
+
+	/**
+	 * Linear interpolation between two keyframe times.
+	 * Return interpolated color.
+	 * 
+	 * @param A    ARGB for point A.
+	 * @param B    ARGB for point B.
+	 * @param t1   First keyframe time.
+	 * @param t2   Second keyframe time.
+	 * @param newT New mid-point keyframe time.
+	 * @return Interpolated color.
+	 */
+	AE2JSON.prototype.argbInterpolate = function( A, B, t1, t2, newT ) {
+		var l = newT - t1;
+		var L = t2 - t1;
+		var Aa = (A >> 24) & 0xff;
+		var Ar = (A >> 16) & 0xff;
+		var Ag = (A >> 8) & 0xff;
+		var Ab = A & 0xff;
+		var Ba = (B >> 24) & 0xff;
+		var Br = (B >> 16) & 0xff;
+		var Bg = (B >> 8) & 0xff;
+		var Bb = B & 0xff;
+		var Ya = (Aa + l*(Ba - Aa)/L);
+		var Yr = (Ar + l*(Br - Ar)/L);
+		var Yg = (Ag + l*(Bg - Ag)/L);
+		var Yb = (Ab + l*(Bb - Ab)/L);
+		return  ((Ya << 24) & 0xff000000) |
+				((Yr << 16) & 0xff0000) |
+				((Yg << 8) & 0xff00) |
+				(Yb & 0xff);
+	}
+
+	/**
+	 * Linear interpolation between two X, Y coordinates.
+	 * Return interpolated values.
+	 * 
+	 * @param A    {"x", "y"} for point A.
+	 * @param B    {"x", "y"} for point B.
+	 * @param t1   First keyframe time.
+	 * @param t2   Second keyframe time.
+	 * @param newT New mid-point keyframe time.
+	 * @return Interpolated coordinates.
+	 */
+	AE2JSON.prototype.xyInterpolate = function( A, B, t1, t2, newT ) {
+		var l = newT - t1;
+		var L = t2 - t1;
+		return {
+			"x": A["x"] + (l * (B["x"]-A["x"])/L),
+			"y": A["y"] + (l * (B["y"]-A["y"])/L)
+		};
+	}
+
+	/**
+	 * Linear interpolation between two values.
+	 * Return interpolated values.
+	 * 
+	 * @param A    First value
+	 * @param B    Second value
+	 * @param t1   First keyframe time.
+	 * @param t2   Second keyframe time.
+	 * @param newT New mid-point keyframe time.
+	 * @return Interpolated value
+	 */
+	AE2JSON.prototype.interpolate = function( A, B, t1, t2, newT ) {
+		var l = newT - t1;
+		var L = t2 - t1;
+		return A + (l * (B-A)/L);
 	}
 
 	AE2JSON.prototype.checkLayerType = function(layer){
@@ -307,7 +476,7 @@
 
 	AE2JSON.prototype.makeSpineBoneName = function(layer) {
 		var layerName = layer.name.replace(/\.[a-z]+_/,'_');
-  		if (layer.parent > 0) {
+		if (layer.parent > 0) {
 			var baseNameRegex = /^([A-Za-z ]+)[0-9]+.*$/;
 			var baseName = layerName.replace(baseNameRegex,"$1");
 			var layers = this.defaultComp.layers;
@@ -521,7 +690,7 @@
 			if (a["depth"] == b["depth"]) {
 				return a["name"].localeCompare( b["name"] );
 			} else {
-			 	return a["depth"] < b["depth"] ? -1 : 1;
+				return a["depth"] < b["depth"] ? -1 : 1;
 			}
 		} );
 
@@ -721,6 +890,10 @@
 				});
 			}
 
+			if (slotAnimData[boneName]) {
+				slotAnimData[boneName]["layer"] = layer;	// Must delete before output
+			}
+
 		}
 		return slotAnimData;
 	}
@@ -808,6 +981,9 @@
 					}
 					if (!boneAnimData[boneName]) boneAnimData[boneName] = {};
 					boneAnimData[boneName]["rotate"] = rotateTimeline;
+				}
+				if (boneAnimData[boneName]) {
+					boneAnimData[boneName]["layer"] = layer;	// Must delete before output
 				}
 			}
 		}
@@ -954,17 +1130,19 @@
 						prop = propGroup.property(j);
 						propName = prop.name;
 						propName = propName.toCamelCase();
-						group[propName] = this.setPropValues(prop);
+						group[propName] = this.setPropValues(prop,true);
+						group[propName+"_timeline"] = this.setPropValues(prop,false);
 					}
 				}
 			} else {
-				this.objData[groupName] = this.setPropValues(propGroup);
+				this.objData[groupName] = this.setPropValues(propGroup,true);
+				this.objData[groupName+"_timeline"] = this.setPropValues(prop,false);
 			}
 		}
 		//if(hasParent){layer.parent = parentLayer};
 	}
 
-	BaseObject.prototype.setPropValues = function(prop){
+	BaseObject.prototype.setPropValues = function(prop,asKeyframes){
 		var duration = this.compSettings.duration;
 		var frameDuration = this.compSettings.frameDuration;
 		var frameRate = this.compSettings.frameRate;
@@ -972,82 +1150,80 @@
 		var tollerance = 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes
 
 		var timeValues = new Array();
-		if(prop.numKeys > 1){
-			for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++){
-				var keyTime = prop.keyTime(keyIndex);
-				if (keyIndex == 1 && keyTime > 0.0) {
-					var frame = 0;
-					var propVal = prop.valueAtTime(0.0, false);
-					var keyData = [frame, propVal,"hold"];
-					timeValues.push(keyData);
-				}
-				var frame = keyTime / frameDuration;
-				var propVal = prop.keyValue(keyIndex);
-				var interpolation = prop.keyOutInterpolationType(keyIndex);
-				var keyData = [frame, propVal];
-				if (interpolation == KeyframeInterpolationType.HOLD) {
-					keyData.push("hold");
-					timeValues.push(keyData);
-				} else {
-					if (prop.isSpatial) {
-						keyData.push("linear");
-						timeValues.push(keyData);
-						if (keyIndex <= prop.numKeys-1) {
-							var nextPropVal = prop.keyValue(keyIndex+1);
-							var nextKeyTime = prop.keyTime(keyIndex+1);
-							var distance = dist( propVal, nextPropVal );
-							var steps = (nextKeyTime - keyTime) / timeSampleRate;
-							var dx = (nextPropVal[0] - propVal[0]) / steps;
-							var dy = (nextPropVal[1] - propVal[1]) / steps;
-							propVal = propVal.slice(0);	//clone
-							var time = keyTime;
-							for ( var i=1; i<steps; i++ ) {
-								time+=timeSampleRate;
-								propVal[0] += dx;
-								propVal[1] += dy;
-								var interVal = prop.valueAtTime(time, true);
-								var interDist = dist( interVal, propVal );
-								var intollerable = (interDist > distance*tollerance);
-								if (intollerable) {
-									propVal = interVal.slice(0);	//clone
-									//distance = dist( propVal, nextPropVal );
-									dx = (nextPropVal[0] - propVal[0]) / (steps-i);
-									dy = (nextPropVal[1] - propVal[1]) / (steps-i);
-									keyData = [time/frameDuration, propVal.slice(0), "linear"];
-									timeValues.push(keyData);
-								}
-							}
-						}
-					} else {
-						if (interpolation == KeyframeInterpolationType.LINEAR) {
-							keyData.push("linear");
-						} else if (interpolation == KeyframeInterpolationType.BEZIER) {
-							keyData.push("linear");
-							// keyData.push("bezier");
-							// var easeIn = prop.keyInSpatialEase(keyIndex);
-							// keyData.push(easeIn[0]);
-							// var easeOut = prop.keyOutSpatialEase(keyIndex);
-							// keyData.push(easeOut[0]);
-						}
+		if (asKeyframes) {
+			if (prop.numKeys > 1) {
+				for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++) {
+					var keyTime = prop.keyTime(keyIndex);
+					if (keyIndex == 1 && keyTime > 0.0) {
+						var frame = 0;
+						var propVal = prop.valueAtTime(0.0, false);
+						var keyData = [frame, propVal,"hold"];
 						timeValues.push(keyData);
 					}
+					var frame = keyTime / frameDuration;
+					var propVal = prop.keyValue(keyIndex);
+					var interpolation = prop.keyOutInterpolationType(keyIndex);
+					var keyData = [frame, propVal];
+					if (interpolation == KeyframeInterpolationType.HOLD) {
+						keyData.push("hold");
+						timeValues.push(keyData);
+					} else {
+						if (prop.isSpatial) {
+							keyData.push("linear");
+							timeValues.push(keyData);
+							if (keyIndex <= prop.numKeys-1) {
+								var nextPropVal = prop.keyValue(keyIndex+1);
+								var nextKeyTime = prop.keyTime(keyIndex+1);
+								var distance = dist( propVal, nextPropVal );
+								var steps = (nextKeyTime - keyTime) / timeSampleRate;
+								var dx = (nextPropVal[0] - propVal[0]) / steps;
+								var dy = (nextPropVal[1] - propVal[1]) / steps;
+								propVal = propVal.slice(0);	//clone
+								var time = keyTime;
+								for ( var i=1; i<steps; i++ ) {
+									time+=timeSampleRate;
+									propVal[0] += dx;
+									propVal[1] += dy;
+									var interVal = prop.valueAtTime(time, true);
+									var interDist = dist( interVal, propVal );
+									var intollerable = (interDist > distance*tollerance);
+									if (intollerable) {
+										propVal = interVal.slice(0);	//clone
+										//distance = dist( propVal, nextPropVal );
+										dx = (nextPropVal[0] - propVal[0]) / (steps-i);
+										dy = (nextPropVal[1] - propVal[1]) / (steps-i);
+										keyData = [time/frameDuration, propVal.slice(0), "linear"];
+										timeValues.push(keyData);
+									}
+								}
+							}
+						} else {
+							if (interpolation == KeyframeInterpolationType.LINEAR) {
+								keyData.push("linear");
+							} else if (interpolation == KeyframeInterpolationType.BEZIER) {
+								keyData.push("linear");
+								// keyData.push("bezier");
+								// var easeIn = prop.keyInSpatialEase(keyIndex);
+								// keyData.push(easeIn[0]);
+								// var easeOut = prop.keyOutSpatialEase(keyIndex);
+								// keyData.push(easeOut[0]);
+							}
+							timeValues.push(keyData);
+						}
+					}
 				}
+			} else {
+				timeValues.push([0, prop.value, "hold"]);
 			}
 		} else {
-			timeValues.push([0, prop.value, "hold"]);
+			startFrame = 0; //Number(timeToCurrentFormat(firstKeyTime, frameRate));
+			endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
+			for(frame = startFrame; frame <= endFrame; frame++){
+				time = frame * frameDuration;
+				propVal = prop.valueAtTime(time, false);
+				timeValues.push([time, frame, propVal]);
+			}
 		}
-
-		// } else {
-		// 	startFrame = 0; //Number(timeToCurrentFormat(firstKeyTime, frameRate));
-		// 	endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
-
-		// 	for(frame = startFrame; frame <= endFrame; frame++){
-		// 		time = frame * frameDuration;
-		// 		propVal = prop.valueAtTime(time, false);
-		// 		timeValues.push([frame, propVal]);
-		// 		//timeValues.push([time, propVal]);
-		// 	}
-		// }
 		
 		return timeValues;
 	}
@@ -1113,7 +1289,7 @@
 			var endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
 
 			// The time remap keyframe values only
-			this.objData["timeRemap"] = this.setPropValues( layer["timeRemap"] );
+			this.objData["timeRemap"] = this.setPropValues( layer["timeRemap"], true );
 			var len = this.objData["timeRemap"].length;
 			this.objData["timeRemap"].sort( function(a,b) { return a[0] < b[0] ? -1 : 1; });
 			for (var i=0; i<len; i++) {
