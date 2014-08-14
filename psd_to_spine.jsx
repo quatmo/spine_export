@@ -1,6 +1,6 @@
 ﻿/*
 	Export Photoshop to Spine JSON
-	Version 1
+	Version 2
 
 	based on psd-to-html-exporter.jsx by Uli Hecht
 	based on ExportLayerCoordinatesToXML (by pattesdours)
@@ -69,16 +69,17 @@ function boneRelativeCoordinates( spineData ) {
 	var numBones = spineData["bones"].length;
 	for (var i = numBones-1; i >= 0; i-- ) {
 		var bone = spineData["bones"][i];
-		var childBones = getChildren( spineData, bone["name"] );
-		if (childBones.length > 0) {
-			var bounds = getBounds( spineData, childBones, bone["name"] );
-			if (bounds != null) {
-//if (bone["name"]=="root") alert(bone["name"]+"\n\n"+JSON.stringify(bone,null,"\t")+"\n\n"+JSON.stringify(bounds,null,"\t"));
-				var x = bounds["x"] + (bounds["width"]/2);
-				var y = bounds["y"] + (bounds["height"]/2);
-				bone["x"] = x;
-				bone["y"] = y;
-				moveBones( childBones, -x, -y );
+		if (bone["name"]!="root") {
+			var childBones = getChildren( spineData, bone["name"] );
+			if (childBones.length > 0) {
+				var bounds = getBounds( spineData, childBones, bone["name"] );
+				if (bounds != null) {
+					var x = bounds["x"] + (bounds["width"]/2);
+					var y = bounds["y"] + (bounds["height"]/2);
+					bone["x"] = x;
+					bone["y"] = y;
+					moveBones( childBones, -x, -y );
+				}
 			}
 		}
 	}
@@ -281,6 +282,8 @@ function processLayers(doc, docFileName) {
 	processLayers.traverse(spineData, doc, doc.layers, docFileName, "root");
 	boneRelativeCoordinates( spineData );
 	scaleBones( spineData["bones"], 1, -1 );
+	var rootBones = getChildren( spineData, "root" );
+	moveBones( rootBones, -doc.width.as('px') / 2, doc.height.as('px') / 2 );
 	delete spineData["bones"][0]["x"];	// Center the root at (0,0)
 	delete spineData["bones"][0]["y"];
 	return spineData
