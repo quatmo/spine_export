@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 20
+	Version 21
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -83,22 +83,38 @@
 
 	AE2JSON.prototype.combineComps = function(){
 		var masterDuration = this.masterComp.duration;
+		var animations = this.jsonData["animations"];
 		var i=0;
 		while (i < this.jsonData.bones.length) {
-			if (this.jsonData.bones[i].comp) {
-				var boneName = this.jsonData.bones[i]["name"];
-				var compName = this.jsonData.bones[i]["comp"];
+			if (this.jsonData.bones[i].hasOwnProperty("comp")) {
+				var bone = this.jsonData.bones[i];
+				var boneName = bone["name"];
+				var compName = bone["comp"];
+				var flipX = (bone.hasOwnProperty("scaleX") && (bone["scaleX"] < 0));
+				var flipY = bone.hasOwnProperty("scaleY") && (bone["scaleY"] < 0);
+				if (animations["animation"].hasOwnProperty("bones")) {
+					if (animations["animation"]["bones"][boneName].hasOwnProperty("scale")) {
+						var scaleAnim = animations["animation"]["bones"][boneName]["scale"];
+						if (scaleAnim.length > 0) {
+							flipX = scaleAnim[0]["x"] < 0;
+							flipY = scaleAnim[0]["y"] < 0;
+						}
+					}
+				}
 				var compData = this.compData[ compName ]
-				var compInPoint = this.jsonData.bones[i]["inPoint"];
-				var compAnchorPoint = this.jsonData.bones[i]["anchorPoint"];
-				var animations = this.jsonData["animations"];
-				this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animations,masterDuration);
+				var compInPoint = bone["inPoint"];
+				var compOutPoint = bone["outPoint"];
+				var compAnchorPoint = bone["anchorPoint"];
+				if (compInPoint < masterDuration && compOutPoint > 0) {
+					this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animations,masterDuration,compOutPoint,flipX,flipY);
+				}
 				if (animations["animation"]["slots"][boneName]) {
 					delete animations["animation"]["slots"][boneName];
 				}
-				delete this.jsonData.bones[i]["comp"];
-				delete this.jsonData.bones[i]["inPoint"];
-				delete this.jsonData.bones[i]["anchorPoint"];
+				delete bone["comp"];
+				delete bone["inPoint"];
+				delete bone["outPoint"];
+				delete bone["anchorPoint"];
 			} else {
 				this.addInPointAll( this.jsonData.animations["animation"]["bones"], this.jsonData.animations["animation"]["bones"], null, 0, masterDuration );
 				this.addInPointAll( this.jsonData.animations["animation"]["slots"], this.jsonData.animations["animation"]["slots"], null, 0, masterDuration );
@@ -115,7 +131,7 @@
 		}
 	}
 
-	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimations,masterDuration){
+	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimations,masterDuration,compOutPoint,flipX,flipY){
 		// Make a copy first
 		compData = JSON.parse(JSON.stringify(compData));
 		//
@@ -213,11 +229,20 @@
 		//
 		// Copy slot animations
 		//
-		this.addInPointAll( compData.animations["animation"]["slots"], this.jsonData.animations["animation"]["slots"], parentBoneName, compInPoint, masterDuration );
 		var colorAnimation = compAnimations["animation"]["slots"][parentBoneName] && compAnimations["animation"]["slots"][parentBoneName].hasOwnProperty("color") ? compAnimations["animation"]["slots"][parentBoneName]["color"] : null;
-		if (colorAnimation) {
-			if (animData.hasOwnProperty("color") == false) {
-				animData["color"] = colorAnimation;
+		var fromAnimData = compData.animations["animation"]["slots"];
+		var toAnimData = this.jsonData.animations["animation"]["slots"];
+		for (var name in fromAnimData) {
+			var animEntry = fromAnimData[name];
+			if (parentBoneName != null) {
+				name = parentBoneName+"_"+name;
+			}
+			toAnimData[name] = animEntry;
+			this.addInPoint( animEntry, compInPoint, masterDuration, animEntry["layer"] );
+			if (colorAnimation) {
+				if (animEntry.hasOwnProperty("color") == false) {
+					animEntry["color"] = colorAnimation;
+				}
 			}
 		}
 		// Duplicate any color animation onto every slot in the nested comp that doesn't have some already
@@ -228,13 +253,38 @@
 				if (!this.jsonData.animations["animation"]["slots"]) {
 					this.jsonData.animations["animation"]["slots"] = {};
 				}
-				if (!this.jsonData.animations["animation"]["slots"][name]) {
-					this.jsonData.animations["animation"]["slots"][name] = {};
+				var animEntry = this.jsonData.animations["animation"]["slots"][name];
+				if (!animEntry) {
+					animEntry = this.jsonData.animations["animation"]["slots"][name] = {};
 				}
-				var animData = this.jsonData.animations["animation"]["slots"][name];
-				if (!animData || !animData.hasOwnProperty("color")) {
-					//alert(name+"\n\n"+JSON.stringify(,null,"\t"));
-					this.jsonData.animations["animation"]["slots"][name]["color"] = colorAnimation;
+				if (!animEntry.hasOwnProperty("color")) {
+					animEntry["color"] = colorAnimation;
+				}
+			}
+		}
+		// If the comp layer ends before the end of the master composition, then add slot keyframes to null out all textures, making it invisible.
+		if (compOutPoint < masterDuration) {
+			for (var i=0; i<numSlots; i++) {
+				var slotData = this.jsonData.slots[slotStartingIndex + i];
+				var name = slotData["name"];
+				if (!this.jsonData.animations["animation"]["slots"]) {
+					this.jsonData.animations["animation"]["slots"] = {};
+				}
+				var animEntry = this.jsonData.animations["animation"]["slots"][name];
+				if (!animEntry) {
+					animEntry = this.jsonData.animations["animation"]["slots"][name] = {};
+				}
+				var attachmentTimeline = animEntry["attachment"];
+				if (!attachmentTimeline) {
+					attachmentTimeline = animEntry["attachment"] = attachmentTimeline = []
+				}
+				if (attachmentTimeline.length == 0 || attachmentTimeline[attachmentTimeline.length-1]["time"] != compOutPoint) {
+					attachmentTimeline.push({
+						"time": compOutPoint,
+						"name": null
+					})
+				} else {
+					attachmentTimeline[attachmentTimeline.length-1]["name"] = null;
 				}
 			}
 		}
@@ -242,53 +292,87 @@
 		// Copy bone animation data
 		//
 		this.addInPointAll( compData.animations["animation"]["bones"], this.jsonData.animations["animation"]["bones"], parentBoneName, compInPoint, masterDuration );
+		//
+		// Process any flips
+		//
+		if (flipX || flipY) {
+			this.flipRotations( compData, flipX, flipY );
+		}
 	}
 
 	AE2JSON.prototype.addInPointAll = function(fromAnimData,toAnimData,parentBoneName,inPoint,masterDuration){
 		for (var name in fromAnimData) {
-			var layer = fromAnimData[name]["layer"];
 			var animEntry = fromAnimData[name];
 			if (parentBoneName != null) {
 				name = parentBoneName+"_"+name;
 			}
 			toAnimData[name] = animEntry;
-			this.addInPoint( animEntry, inPoint, masterDuration, layer );
+			this.addInPoint( animEntry, inPoint, masterDuration, animEntry["layer"] );
 		}
+	}
+
+
+	AE2JSON.prototype.flipRotations = function(animEntry,flipX,flipY){
+		for (var prop in animEntry) {
+			if (animEntry[prop] instanceof Array ) {
+				var len = animEntry[prop].length;
+				if (len > 0 && animEntry[prop][0].hasOwnProperty("angle") ) {
+					for (i=0; i<len; i++) {
+						//animEntry[prop][i]["oangle"] = animEntry[prop][i]["angle"];
+						animEntry[prop][i]["angle"] = this.flipRotation( animEntry[prop][i]["angle"], flipX, flipY );
+					}
+				}
+			} else if (prop == "rotation") {
+				animEntry["rotation"] = this.flipRotation( animEntry["rotation"], flipX, flipY );
+			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
+				this.flipRotations( animEntry[prop], flipX, flipY );
+			}
+		}
+	}
+
+	AE2JSON.prototype.flipRotation = function(angle,flipX,flipY){
+		var newAngle = angle;
+		if (flipX && flipY) {
+			newAngle = (angle + 180) % 360;
+		} else if (flipX) {
+			newAngle = (360 - angle) % 360;
+		} else if (flipY) {
+			newAngle = (405 - angle) % 360;
+		}
+		return newAngle;
 	}
 
 	AE2JSON.prototype.addInPoint = function(animEntry,inPoint,masterDuration,layer){
 		for (var prop in animEntry) {
-			if (prop == "time") {
-				var time = animEntry["time"];
-				var newTime = time + inPoint;
-				animEntry["time"] = newTime;
-				if (newTime > masterDuration) {
-					return false;
-				}
-				break;
-			} else if (animEntry[prop] instanceof Array ) {
+			if (animEntry[prop] instanceof Array ) {
 				var len = animEntry[prop].length;
-				var i;
-				var splice = false;
-				for (i=0; i<len; i++) {
-					if (this.addInPoint( animEntry[prop][i], inPoint, masterDuration, layer) == false) {
-						splice = true;
-						break;
+				if (len > 0 && animEntry[prop][0].hasOwnProperty("time") ) {
+					var i, startIndex=-1, endIndex=-1;
+					for (i=0; i<len; i++) {
+						var newTime = (animEntry[prop][i]["time"] += inPoint);
+						if (newTime >= 0 && startIndex == -1) {
+							startIndex = i;
+						}
+						if (newTime <= masterDuration ) {
+							endIndex = i;
+						}
+					}
+ 					if (endIndex != (len-1)) {
+//alert(layer.name+"\n"+prop+"\n"+(len-1)+"\n"+endIndex);
+						this.spliceKeyframesEnd( animEntry[prop], endIndex+1, inPoint, masterDuration, layer, prop );
+					}
+					if (startIndex > 0) {
+						this.spliceKeyframesStart( animEntry[prop], startIndex, inPoint, masterDuration, layer, prop );
 					}
 				}
-				if (splice) {
-					this.spliceKeyframe( animEntry[prop], i, inPoint, masterDuration, layer, prop );
-				}
 			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
-				if (this.addInPoint( animEntry[prop], inPoint, masterDuration, layer) == false) {
-					return false;
-				}
+				this.addInPoint( animEntry[prop], inPoint, masterDuration, layer);
 			}
 		}
 		return true;
 	}
 
-	AE2JSON.prototype.spliceKeyframe = function(animData,index,inPoint,masterDuration,layer,prop) {
+	AE2JSON.prototype.spliceKeyframesEnd = function(animData,index,inPoint,masterDuration,layer,prop) {
 		var len = animData.length;
 		// If there's only 1 keyframe or we'll only be left with one keyframe
 		if (len == 1 || index == 0) {
@@ -305,7 +389,7 @@
 			case "translate":
 				animData[index]["time"] = masterDuration;
 				timeline = layer.transform.position_timeline;
-				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
+				timelineIndex = this.findTimelineIndexAfter( timeline, masterDuration-inPoint );
 				newValue = timeline[timelineIndex];
 				animData[index]["x"] =  (newValue[2][0] - timeline[0][2][0]);
 				animData[index]["y"] = -(newValue[2][1] - timeline[0][2][1]);
@@ -313,14 +397,14 @@
 			case "rotate":
 				animData[index]["time"] = masterDuration;
 				timeline = layer.transform.rotation_timeline;
-				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
-				newValue = timeline[timelineIndex][2];
-				animData[index]["angle"] = (360 - newValue) % 360;
+				timelineIndex = this.findTimelineIndexAfter( timeline, masterDuration-inPoint );
+				newValue = timeline[0][2] - timeline[timelineIndex][2];
+				animData[index]["angle"] = newValue % 360;
 				break;
 			case "scale":
 				animData[index]["time"] = masterDuration;
 				timeline = layer.transform.scale_timeline;
-				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
+				timelineIndex = this.findTimelineIndexAfter( timeline, masterDuration-inPoint );
 				newValue = timeline[timelineIndex];
 				animData[index]["x"] = newValue[2][0] / 100.0;
 				animData[index]["y"] = newValue[2][1] / 100.0;
@@ -331,7 +415,7 @@
 			case "color":
 				animData[index]["time"] = masterDuration;
 				timeline = layer.transform.opacity_timeline;
-				timelineIndex = this.findTimelineIndex( timeline, masterDuration-inPoint );
+				timelineIndex = this.findTimelineIndexAfter( timeline, masterDuration-inPoint );
 				newValue = Math.round((timeline[timelineIndex][2] / 100.0) * 0xFF);
 				var opacityHex = ("0"+newValue.toString(16)).substr(-2);
 				animData[index]["color"] = "FFFFFF" + opacityHex;
@@ -339,10 +423,13 @@
 		}
 		if (index < len-1) {
 			animData.splice(index+1,len-index-1);
+			if (animData[index]["curve"] == "stepped") {
+				delete animData[index]["curve"];
+			}
 		}
 	}
 
-	AE2JSON.prototype.findTimelineIndex = function(timeline,time) {
+	AE2JSON.prototype.findTimelineIndexAfter = function(timeline,time) {
 		var len = timeline.length;
 		var i;
 		for (i=0; i<len; i++) {
@@ -351,6 +438,71 @@
 			}
 		}
 		return i == len ? i-1 : i;
+	}
+
+	AE2JSON.prototype.spliceKeyframesStart = function(animData,index,inPoint,masterDuration,layer,prop) {
+		var len = animData.length;
+		// If there's only 1 keyframe or we'll only be left with one keyframe
+		if (len == 1 || index == len-1) {
+			if (len > 1) {
+				animData.splice(0,len-1);
+			}
+			animData[0]["time"] = 0.0;
+			return;
+		}
+		if (index > 1) {
+			animData.splice(0,index-1);
+		}
+		var timeline;
+		var timelineIndex;
+		var newValue;
+		switch (prop) {
+			case "translate":
+				animData[0]["time"] = 0.0;
+				timeline = layer.transform.position_timeline;
+				timelineIndex = this.findTimelineIndexBefore( timeline, -inPoint );
+				newValue = timeline[timelineIndex];
+				animData[0]["x"] =  (newValue[2][0] - timeline[0][2][0]);
+				animData[0]["y"] = -(newValue[2][1] - timeline[0][2][1]);
+				break;
+			case "rotate":
+				animData[0]["time"] = 0.0;
+				timeline = layer.transform.rotation_timeline;
+				timelineIndex = this.findTimelineIndexBefore( timeline, -inPoint );
+				newValue = timeline[timelineIndex][2];
+				animData[0]["angle"] = (360 - newValue) % 360;
+				break;
+			case "scale":
+				animData[0]["time"] = 0.0;
+				timeline = layer.transform.scale_timeline;
+				timelineIndex = this.findTimelineIndexBefore( timeline, -inPoint );
+				newValue = timeline[timelineIndex];
+				animData[0]["x"] = newValue[2][0] / 100.0;
+				animData[0]["y"] = newValue[2][1] / 100.0;
+				break;
+			case "attachment":
+				--index;	// Just delete attachment keyframes beyond the end of the master timeline
+				break;
+			case "color":
+				animData[0]["time"] = 0.0;
+				timeline = layer.transform.opacity_timeline;
+				timelineIndex = this.findTimelineIndexBefore( timeline, -inPoint );
+				newValue = Math.round((timeline[timelineIndex][2] / 100.0) * 0xFF);
+				var opacityHex = ("0"+newValue.toString(16)).substr(-2);
+				animData[0]["color"] = "FFFFFF" + opacityHex;
+				break;
+		}
+	}
+
+	AE2JSON.prototype.findTimelineIndexBefore = function(timeline,time) {
+		var len = timeline.length;
+		var i;
+		for (i=len-1; i>=0; i--) {
+			if (timeline[i][0] <= time) {
+				break;
+			}
+		}
+		return i < 0 ? i-1 : i;
 	}
 
 
@@ -631,6 +783,7 @@
 					if (layer.comp) {
 						boneData["comp"] = layer.comp;
 						boneData["inPoint"] = layer.inPoint;
+						boneData["outPoint"] = layer.outPoint;
 						boneData["anchorPoint"] = [
 							layer.transform.anchorPoint[0][1][0],
 							layer.transform.anchorPoint[0][1][1]
@@ -795,10 +948,15 @@
 					frame = layer.transform.opacity[j][0];
 					var opacity = Math.round((layer.transform.opacity[j][1] / 100.0) * 255.0);
 					var opacityHex = ("0"+opacity.toString(16)).substr(-2);
-					colorTimeline.push({
+					var keyData = {
 						"time": frame * frameDuration,
 						"color": "FFFFFF" + opacityHex
-					});
+					};
+					var tangentType = layer.transform.opacity[j][2];
+					if (tangentType == "hold" || ((j<numKeys-1) && (layer.transform.opacity[j+1][0] == frame+1))) {
+						keyData["curve"] = "stepped";
+					}
+					colorTimeline.push(keyData);
 				}
 				if (!slotAnimData[boneName]) slotAnimData[boneName] = {};
 				slotAnimData[boneName]["color"] = colorTimeline;
@@ -969,6 +1127,7 @@
 						for (var k=1; k<=steps; k++) {
 							var keyData = {
 								"time": lastTime + (dt * k),
+								//"rotation": layer.transform.rotation[j][1],
 								"angle": (lastValue + (delta * k)) % 360
 							};
 							if (tangentType == "hold") {
@@ -1147,7 +1306,7 @@
 		var frameDuration = this.compSettings.frameDuration;
 		var frameRate = this.compSettings.frameRate;
 		var timeSampleRate = 1.0/(frameRate*1);	//1.0/60.0;
-		var tollerance = 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes
+		var tollerance = 999;	// 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes (using 999 to basically disable for now - too many keyframes)
 
 		var timeValues = new Array();
 		if (asKeyframes) {
