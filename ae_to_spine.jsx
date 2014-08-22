@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 21
+	Version 23
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -93,11 +93,13 @@
 				var flipX = (bone.hasOwnProperty("scaleX") && (bone["scaleX"] < 0));
 				var flipY = bone.hasOwnProperty("scaleY") && (bone["scaleY"] < 0);
 				if (animations["animation"].hasOwnProperty("bones")) {
-					if (animations["animation"]["bones"][boneName].hasOwnProperty("scale")) {
-						var scaleAnim = animations["animation"]["bones"][boneName]["scale"];
-						if (scaleAnim.length > 0) {
-							flipX = scaleAnim[0]["x"] < 0;
-							flipY = scaleAnim[0]["y"] < 0;
+					if (animations["animation"]["bones"].hasOwnProperty(boneName)) {
+						if (animations["animation"]["bones"][boneName].hasOwnProperty("scale")) {
+							var scaleAnim = animations["animation"]["bones"][boneName]["scale"];
+							if (scaleAnim.length > 0) {
+								flipX = scaleAnim[0]["x"] < 0;
+								flipY = scaleAnim[0]["y"] < 0;
+							}
 						}
 					}
 				}
@@ -638,15 +640,16 @@
 				if (otherLayer.index != layer.index && otherLayer.parent == layer.parent) {
 					var otherBaseName = otherLayer.name.replace(baseNameRegex,"$1");
 					if (otherBaseName == baseName) {
-						if ((otherLayer.inPoint <= layer.inPoint && otherLayer.outPoint <= layer.outPoint) ||
-							(otherLayer.inPoint >= layer.inPoint && otherLayer.outPoint >= layer.outPoint)) {
+						if ((otherLayer.inPoint <= layer.inPoint && otherLayer.outPoint <= layer.inPoint) ||
+							(otherLayer.inPoint >= layer.outPoint && otherLayer.outPoint >= layer.outPoint)) {
 							return baseName;
 						}
 					}
 				}
 			}
 		}
-		return layerName.replace(/([^\/]+)\/.*(_L[0-9]+)$/,"$1$2");
+		layerName = layerName.replace(/([^\/]+)\/.*(_L[0-9]+)$/,"$1$2");
+		return layerName;
 	}
 
 	AE2JSON.prototype.makeSpineSlotName = function(layer) {
@@ -936,7 +939,7 @@
 		var layers = this.defaultComp.layers;
 		var numLayers = layers.length;
 		var numKeys, time;
-		var frameDuration = this.defaultComp.compSettings.frameDuration;
+		var frameDuration = 1.0/30.0;	//this.defaultComp.compSettings.frameDuration;
 		var compDuration = this.defaultComp.compSettings.duration;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
@@ -1061,7 +1064,7 @@
 		var layers = this.defaultComp.layers;
 		var numLayers = layers.length;
 		var numKeys, time;
-		var frameDuration = this.defaultComp.compSettings.frameDuration;
+		var frameDuration = 1.0/30.0;	//this.defaultComp.compSettings.frameDuration;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
 			if (layer.enabled) {
@@ -1306,68 +1309,78 @@
 		var frameDuration = this.compSettings.frameDuration;
 		var frameRate = this.compSettings.frameRate;
 		var timeSampleRate = 1.0/(frameRate*1);	//1.0/60.0;
-		var tollerance = 999;	// 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes (using 999 to basically disable for now - too many keyframes)
+		var tollerance = 999; // 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes (using 999 to basically disable for now - too many keyframes)
 
 		var timeValues = new Array();
 		if (asKeyframes) {
 			if (prop.numKeys > 1) {
-				for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++) {
-					var keyTime = prop.keyTime(keyIndex);
-					if (keyIndex == 1 && keyTime > 0.0) {
-						var frame = 0;
-						var propVal = prop.valueAtTime(0.0, false);
-						var keyData = [frame, propVal,"hold"];
-						timeValues.push(keyData);
+				if (tollerance == 0) {
+					var startFrame = 0; //Number(timeToCurrentFormat(firstKeyTime, frameRate));
+					var endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
+					for(frame = startFrame; frame <= endFrame; frame++){
+						time = frame * frameDuration;
+						propVal = prop.valueAtTime(time, false);
+						timeValues.push([frame, propVal]);
 					}
-					var frame = keyTime / frameDuration;
-					var propVal = prop.keyValue(keyIndex);
-					var interpolation = prop.keyOutInterpolationType(keyIndex);
-					var keyData = [frame, propVal];
-					if (interpolation == KeyframeInterpolationType.HOLD) {
-						keyData.push("hold");
-						timeValues.push(keyData);
-					} else {
-						if (prop.isSpatial) {
-							keyData.push("linear");
+				} else {
+					for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++) {
+						var keyTime = prop.keyTime(keyIndex);
+						if (keyIndex == 1 && keyTime > 0.0) {
+							var frame = 0;
+							var propVal = prop.valueAtTime(0.0, false);
+							var keyData = [frame, propVal,"hold"];
 							timeValues.push(keyData);
-							if (keyIndex <= prop.numKeys-1) {
-								var nextPropVal = prop.keyValue(keyIndex+1);
-								var nextKeyTime = prop.keyTime(keyIndex+1);
-								var distance = dist( propVal, nextPropVal );
-								var steps = (nextKeyTime - keyTime) / timeSampleRate;
-								var dx = (nextPropVal[0] - propVal[0]) / steps;
-								var dy = (nextPropVal[1] - propVal[1]) / steps;
-								propVal = propVal.slice(0);	//clone
-								var time = keyTime;
-								for ( var i=1; i<steps; i++ ) {
-									time+=timeSampleRate;
-									propVal[0] += dx;
-									propVal[1] += dy;
-									var interVal = prop.valueAtTime(time, true);
-									var interDist = dist( interVal, propVal );
-									var intollerable = (interDist > distance*tollerance);
-									if (intollerable) {
-										propVal = interVal.slice(0);	//clone
-										//distance = dist( propVal, nextPropVal );
-										dx = (nextPropVal[0] - propVal[0]) / (steps-i);
-										dy = (nextPropVal[1] - propVal[1]) / (steps-i);
-										keyData = [time/frameDuration, propVal.slice(0), "linear"];
-										timeValues.push(keyData);
+						}
+						var frame = keyTime / frameDuration;
+						var propVal = prop.keyValue(keyIndex);
+						var interpolation = prop.keyOutInterpolationType(keyIndex);
+						var keyData = [frame, propVal];
+						if (interpolation == KeyframeInterpolationType.HOLD) {
+							keyData.push("hold");
+							timeValues.push(keyData);
+						} else {
+							if (prop.isSpatial) {
+								keyData.push("linear");
+								timeValues.push(keyData);
+								if (keyIndex <= prop.numKeys-1) {
+									var nextPropVal = prop.keyValue(keyIndex+1);
+									var nextKeyTime = prop.keyTime(keyIndex+1);
+									var distance = dist( propVal, nextPropVal );
+									var steps = (nextKeyTime - keyTime) / timeSampleRate;
+									var dx = (nextPropVal[0] - propVal[0]) / steps;
+									var dy = (nextPropVal[1] - propVal[1]) / steps;
+									propVal = propVal.slice(0);	//clone
+									var time = keyTime;
+									for ( var i=1; i<steps; i++ ) {
+										time+=timeSampleRate;
+										propVal[0] += dx;
+										propVal[1] += dy;
+										var interVal = prop.valueAtTime(time, true);
+										var interDist = dist( interVal, propVal );
+										var intollerable = tollerance == 0 || (interDist > distance*tollerance);
+										if (intollerable) {
+											propVal = interVal.slice(0);	//clone
+											//distance = dist( propVal, nextPropVal );
+											dx = (nextPropVal[0] - propVal[0]) / (steps-i);
+											dy = (nextPropVal[1] - propVal[1]) / (steps-i);
+											keyData = [time/frameDuration, propVal.slice(0), "linear"];
+											timeValues.push(keyData);
+										}
 									}
 								}
+							} else {
+								if (interpolation == KeyframeInterpolationType.LINEAR) {
+									keyData.push("linear");
+								} else if (interpolation == KeyframeInterpolationType.BEZIER) {
+									keyData.push("linear");
+									// keyData.push("bezier");
+									// var easeIn = prop.keyInSpatialEase(keyIndex);
+									// keyData.push(easeIn[0]);
+									// var easeOut = prop.keyOutSpatialEase(keyIndex);
+									// keyData.push(easeOut[0]);
+								}
+								timeValues.push(keyData);
 							}
-						} else {
-							if (interpolation == KeyframeInterpolationType.LINEAR) {
-								keyData.push("linear");
-							} else if (interpolation == KeyframeInterpolationType.BEZIER) {
-								keyData.push("linear");
-								// keyData.push("bezier");
-								// var easeIn = prop.keyInSpatialEase(keyIndex);
-								// keyData.push(easeIn[0]);
-								// var easeOut = prop.keyOutSpatialEase(keyIndex);
-								// keyData.push(easeOut[0]);
-							}
-							timeValues.push(keyData);
 						}
 					}
 				}
