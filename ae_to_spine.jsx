@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 23
+	Version 27
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -42,6 +42,22 @@
 	}
 	function distToSegment(p, v, w) { return Math.sqrt(distToSegmentSquared(p, v, w)); }
 
+	function equals(valueA, valueB){
+		var result = true;
+		if (valueA instanceof Array ) {
+			if (!(valueB instanceof Array) || valueA.length != valueB.length) {
+				result = false;
+			} else {
+				for (var i=0; i<valueA.length && result; i++) {
+					result = equals( valueA[i], valueB[i] );
+				}
+			}
+		} else {
+			result = (valueA == valueB);
+		}
+		return result;
+	}
+
 	function AE2JSON(thisObj,saveToFile) {
 		if (app.project.file == null) {
 			alert("Please save this project file first, then run again.")
@@ -69,6 +85,7 @@
 				this.defaultComp.compSettings = new CompSettings(this.comp);
 				this.defaultComp.layers = [];
 				this.doCompLayers(this.comp);
+//if (this.comp.name=="DustClouds") alert(JSON.stringify(this.defaultComp.layers));
 				this.compData[this.comp.name] = this.generateSpineData();
 			}
 		}
@@ -83,7 +100,7 @@
 
 	AE2JSON.prototype.combineComps = function(){
 		var masterDuration = this.masterComp.duration;
-		var animations = this.jsonData["animations"];
+		var animation = this.jsonData["animations"]["animation"];
 		var i=0;
 		while (i < this.jsonData.bones.length) {
 			if (this.jsonData.bones[i].hasOwnProperty("comp")) {
@@ -92,15 +109,11 @@
 				var compName = bone["comp"];
 				var flipX = (bone.hasOwnProperty("scaleX") && (bone["scaleX"] < 0));
 				var flipY = bone.hasOwnProperty("scaleY") && (bone["scaleY"] < 0);
-				if (animations["animation"].hasOwnProperty("bones")) {
-					if (animations["animation"]["bones"].hasOwnProperty(boneName)) {
-						if (animations["animation"]["bones"][boneName].hasOwnProperty("scale")) {
-							var scaleAnim = animations["animation"]["bones"][boneName]["scale"];
-							if (scaleAnim.length > 0) {
-								flipX = scaleAnim[0]["x"] < 0;
-								flipY = scaleAnim[0]["y"] < 0;
-							}
-						}
+				if (animation["bones"].hasOwnProperty(boneName) && animation["bones"][boneName].hasOwnProperty("scale")) {
+					var scaleAnim = animation["bones"][boneName]["scale"];
+					if (scaleAnim.length > 0) {
+						flipX = scaleAnim[0]["x"] < 0;
+						flipY = scaleAnim[0]["y"] < 0;
 					}
 				}
 				var compData = this.compData[ compName ]
@@ -108,32 +121,43 @@
 				var compOutPoint = bone["outPoint"];
 				var compAnchorPoint = bone["anchorPoint"];
 				if (compInPoint < masterDuration && compOutPoint > 0) {
-					this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animations,masterDuration,compOutPoint,flipX,flipY);
+					this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animation,masterDuration,compOutPoint,flipX,flipY,bone["blendingMode"]);
 				}
-				if (animations["animation"]["slots"][boneName]) {
-					delete animations["animation"]["slots"][boneName];
+				if (animation["slots"][boneName]) {
+					delete animation["slots"][boneName];
 				}
 				delete bone["comp"];
+				delete bone["blendingMode"];
 				delete bone["inPoint"];
 				delete bone["outPoint"];
 				delete bone["anchorPoint"];
 			} else {
-				this.addInPointAll( this.jsonData.animations["animation"]["bones"], this.jsonData.animations["animation"]["bones"], null, 0, masterDuration );
-				this.addInPointAll( this.jsonData.animations["animation"]["slots"], this.jsonData.animations["animation"]["slots"], null, 0, masterDuration );
+				this.addInPointAll( animation["bones"], animation["bones"], null, 0, masterDuration );
+				this.addInPointAll( animation["slots"], animation["slots"], null, 0, masterDuration );
 			}
-			// Delete reference to layer data before output
+			// Delete reference to layer data in bone animation before output
 			delete this.jsonData.bones[i]["layer"];
-			for (var name in this.jsonData.animations["animation"]["bones"]) {
-				delete this.jsonData.animations["animation"]["bones"][name]["layer"];
+			for (var name in animation["bones"]) {
+				delete animation["bones"][name]["layer"];
 			}
-			for (var name in this.jsonData.animations["animation"]["slots"]) {
-				delete this.jsonData.animations["animation"]["slots"][name]["layer"];
+			// Delete reference to layer data in slot animation before output
+			for (var name in animation["slots"]) {
+				delete animation["slots"][name]["layer"];
 			}
 			i++;
 		}
+		// Delete reference to opacity value in slot animation before output
+		for (var name in animation["slots"]) {
+			var anim = animation["slots"][name];
+			if (anim.hasOwnProperty("color")) {
+				for (var j=0; j<anim["color"].length; j++) {
+					delete anim["color"][j]["opacity"];
+				}
+			}
+		}
 	}
 
-	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimations,masterDuration,compOutPoint,flipX,flipY){
+	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimation,masterDuration,compOutPoint,flipX,flipY,compBlendingMode){
 		// Make a copy first
 		compData = JSON.parse(JSON.stringify(compData));
 		//
@@ -146,6 +170,15 @@
 				var newBoneData = {};
 				for (var prop in boneData) {
 					newBoneData[prop] = boneData[prop];
+				}
+				if (newBoneData.hasOwnProperty("inPoint")) {
+					newBoneData["inPoint"] += compInPoint;
+				}
+				if (newBoneData.hasOwnProperty("outPoint")) {
+					newBoneData["outPoint"] += compInPoint;
+				}
+				if (newBoneData.hasOwnProperty("blendingMode") && newBoneData["blendingMode"] == BlendingMode.NORMAL) {
+					newBoneData["blendingMode"] = compBlendingMode;
 				}
 				if (newBoneData.parent == "root") {
 					newBoneData["x"] -= compAnchorPoint[0];
@@ -181,6 +214,9 @@
 			if (slotData["additive"]) {
 				newSlotData["additive"] = slotData["additive"];
 			}
+			if (compBlendingMode != BlendingMode.NORMAL) {
+				newSlotData["additive"] = true;
+			}
 			if (slotData["color"]) {
 				newSlotData["color"] = slotData["color"];
 			}
@@ -189,11 +225,11 @@
 			}
 			this.jsonData.slots.splice(slotStartingIndex+i,0,newSlotData);
 			if (compInPoint > 0) {
-				var animData = compData.animations["animation"]["slots"][name];
+				var animData = compData["animations"]["animation"]["slots"][name];
 				var attachmentTimeline;
 				if (!animData) {
 					attachmentTimeline = []
-					animData = compData.animations["animation"]["slots"][name] = {
+					animData = compData["animations"]["animation"]["slots"][name] = {
 						"attachment": attachmentTimeline
 					};
 				} else {
@@ -202,16 +238,18 @@
 						attachmentTimeline = animData["attachment"] = [];
 					}
 				}
-				var newAnimData = {
-					"time": -compInPoint,
-					"name": null
-				};
-				attachmentTimeline.splice(0,0,newAnimData);
-				newAnimData = {
-					"time": 0,
-					"name": attachment
-				};
-				attachmentTimeline.splice(1,0,newAnimData);
+				if (attachmentTimeline.length == 0 || attachmentTimeline[0]["name"] != null) {
+					var newAnimData = {
+						"time": -compInPoint,
+						"name": null
+					};
+					attachmentTimeline.splice(0,0,newAnimData);
+					newAnimData = {
+						"time": 0,
+						"name": attachment
+					};
+					attachmentTimeline.splice(1,0,newAnimData);
+				}
 			}
 		}
 		if (this.jsonData.slots[slotStartingIndex+i]["comp"]) {
@@ -220,47 +258,102 @@
 		//
 		// Copy skins
 		//
-		for (var name in compData.skins["default"]) {
-			var skinData = compData.skins["default"][name];
+		for (var name in compData["skins"]["default"]) {
+			var skinData = compData["skins"]["default"][name];
 			var newSkinData = {};
 			for (var prop in skinData) {
 				newSkinData[prop] = skinData[prop];
 			}
-			this.jsonData.skins["default"][parentBoneName+"_"+name] = newSkinData;
+			this.jsonData["skins"]["default"][parentBoneName+"_"+name] = newSkinData;
 		}
 		//
 		// Copy slot animations
 		//
-		var colorAnimation = compAnimations["animation"]["slots"][parentBoneName] && compAnimations["animation"]["slots"][parentBoneName].hasOwnProperty("color") ? compAnimations["animation"]["slots"][parentBoneName]["color"] : null;
-		var fromAnimData = compData.animations["animation"]["slots"];
-		var toAnimData = this.jsonData.animations["animation"]["slots"];
+		var colorAnimation = compAnimation["slots"][parentBoneName] && compAnimation["slots"][parentBoneName].hasOwnProperty("color") ? compAnimation["slots"][parentBoneName]["color"] : null;
+		var fromAnimData = compData["animations"]["animation"]["slots"];
+		var toAnimData = this.jsonData["animations"]["animation"]["slots"];
+//alert(parentBoneName+"\n"+JSON.stringify(colorAnimation,null,"\t"));
 		for (var name in fromAnimData) {
 			var animEntry = fromAnimData[name];
-			if (parentBoneName != null) {
-				name = parentBoneName+"_"+name;
-			}
-			toAnimData[name] = animEntry;
+			toAnimData[parentBoneName+"_"+name] = animEntry;
 			this.addInPoint( animEntry, compInPoint, masterDuration, animEntry["layer"] );
-			if (colorAnimation) {
-				if (animEntry.hasOwnProperty("color") == false) {
-					animEntry["color"] = colorAnimation;
-				}
-			}
+			// if (colorAnimation) {
+			// 	if (animEntry.hasOwnProperty("color") == false) {
+			// 		animEntry["color"] = JSON.parse(JSON.stringify(colorAnimation));
+			// 	}
+			// }
 		}
 		// Duplicate any color animation onto every slot in the nested comp that doesn't have some already
 		if (colorAnimation) {
 			for (var i=0; i<numSlots; i++) {
 				var slotData = this.jsonData.slots[slotStartingIndex + i];
 				var name = slotData["name"];
-				if (!this.jsonData.animations["animation"]["slots"]) {
-					this.jsonData.animations["animation"]["slots"] = {};
+				if (!toAnimData) {
+					toAnimData = {};
 				}
-				var animEntry = this.jsonData.animations["animation"]["slots"][name];
+				var animEntry = toAnimData[name];
 				if (!animEntry) {
-					animEntry = this.jsonData.animations["animation"]["slots"][name] = {};
+					animEntry = toAnimData[name] = {};
 				}
 				if (!animEntry.hasOwnProperty("color")) {
-					animEntry["color"] = colorAnimation;
+					animEntry["color"] = JSON.parse(JSON.stringify(colorAnimation));
+				} else {
+					var numColors = animEntry["color"].length;
+					var compColors = colorAnimation.length;
+// alert(JSON.stringify(animEntry["color"],null,"\t")+"\n\n"+JSON.stringify(colorAnimation,null,"\t"));
+					var j=0,k=0;
+					//   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9
+					//         j
+					// J * *   *            *      *   *
+					// K     *       *   *           *   *
+					//               k
+					var newColorAnim = [];
+					var opacity;
+					do {
+						var compEntry = colorAnimation[k<compColors?k:compColors-1];
+						var colorEntry = animEntry["color"][j<numColors?j:numColors-1];
+						var newColorEntry = {};
+
+						if (colorEntry["time"] == compEntry["time"] || j >= numColors || k >= compColors) {
+							opacity = (colorEntry["opacity"]/255.0) * compEntry["opacity"];
+							newColorEntry["time"] = colorEntry["time"] > compEntry["time"] ? colorEntry["time"] : compEntry["time"];
+// newColorEntry["debug"] = "equal";
+// alert("EQUAL\n"+"K "+k+" "+compEntry["time"]+"\n"+"J "+j+" "+colorEntry["time"]+"\n");
+							j++;
+							k++;
+						} else if (colorEntry["time"] > compEntry["time"]) {
+// alert("K "+compEntry["time"]+"\n"+j+"<"+numColors+"\n"+k+"<"+compColors);
+							var prev = compEntry;
+							var next = colorAnimation[k+1<compColors?k+1:compColors-1];
+							opacity = this.interpolate( prev["opacity"], next["opacity"], prev["time"], next["time"], colorEntry["time"] );
+							opacity = (compEntry["opacity"]/255.0) * opacity;
+							newColorEntry["time"] = colorEntry["time"];
+// newColorEntry["debug"] = "j ahead";
+// alert("J AHEAD\n"+"K "+k+" "+compEntry["time"]+"\n"+"J "+j+" "+colorEntry["time"]+"\n");
+							k++;
+						} else {
+// alert("J "+colorEntry["time"]+"\n"+j+"<"+numColors+"\n"+k+"<"+compColors);
+							var prev = colorEntry;
+							var next = animEntry["color"][j+1<numColors?j+1:numColors-1];
+							opacity = this.interpolate( prev["opacity"], next["opacity"], prev["time"], next["time"], colorEntry["time"] );
+							opacity = (compEntry["opacity"]/255.0) * opacity;
+							newColorEntry["time"] = colorEntry["time"];
+// newColorEntry["debug"] = "k ahead";
+// alert("K AHEAD\n"+"K "+k+" "+compEntry["time"]+"\n"+"J "+j+" "+colorEntry["time"]+"\n");
+							j++;
+						}
+						newColorEntry["color"] = this.opacityToHex( opacity );
+						newColorEntry["opacity"] = opacity;
+// newColorEntry["j"] = j;
+// newColorEntry["k"] = k;
+						newColorAnim.push( newColorEntry );
+// alert("AT\n"+j+"<"+numColors+"\n"+k+"<"+compColors);
+					} while ( j<numColors || k<compColors );
+
+					animEntry["color"] = newColorAnim.sort( function(a,b) {
+						if (a["time"] < b["time"]) return -1; else if (a["time"] > b["time"]) return 1; return 0;
+					} );
+// alert(JSON.stringify(animEntry["color"],null,"\t"));
 				}
 			}
 		}
@@ -269,12 +362,12 @@
 			for (var i=0; i<numSlots; i++) {
 				var slotData = this.jsonData.slots[slotStartingIndex + i];
 				var name = slotData["name"];
-				if (!this.jsonData.animations["animation"]["slots"]) {
-					this.jsonData.animations["animation"]["slots"] = {};
+				if (!toAnimData) {
+					toAnimData = {};
 				}
-				var animEntry = this.jsonData.animations["animation"]["slots"][name];
+				var animEntry = toAnimData[name];
 				if (!animEntry) {
-					animEntry = this.jsonData.animations["animation"]["slots"][name] = {};
+					animEntry = toAnimData[name] = {};
 				}
 				var attachmentTimeline = animEntry["attachment"];
 				if (!attachmentTimeline) {
@@ -293,13 +386,49 @@
 		//
 		// Copy bone animation data
 		//
-		this.addInPointAll( compData.animations["animation"]["bones"], this.jsonData.animations["animation"]["bones"], parentBoneName, compInPoint, masterDuration );
+		this.addInPointAll( compData["animations"]["animation"]["bones"], this.jsonData["animations"]["animation"]["bones"], parentBoneName, compInPoint, masterDuration );
 		//
 		// Process any flips
 		//
 		if (flipX || flipY) {
 			this.flipRotations( compData, flipX, flipY );
 		}
+	}
+
+	AE2JSON.prototype.findEntryBeforeTime = function( animData, time ) {
+		var len=animData.length;
+		var i=0;
+		while (i<len && animData[i]["time"] < time) {
+			i++;
+		}
+		return animData[i<len?i:len-1];
+	}
+
+	AE2JSON.prototype.findEntryAfterTime = function( animData, time ) {
+		var len=animData.length;
+		var i=len-1;
+		while (i>=0 && animData[i]["time"] > time) {
+			i++;
+		}
+		return animData[i>0?i:0];
+	}
+
+	AE2JSON.prototype.multiplyOpacity = function( rgbaString1, rgbaString2 ) {
+		var op1 = this.getOpacity(rgbaString1);
+		var op2 = this.getOpacity(rgbaString2);
+		var opacity = op1 * op2;
+		var opacityHex = ("0"+opacity.toString(16)).substr(-2);
+		return "FFFFFF" + opacityHex;
+	}
+
+	AE2JSON.prototype.getOpacity = function( rgbaString ) {
+		return parseInt("0x"+rgbaString.substr(-2)) / 255.0;
+	}
+
+	AE2JSON.prototype.opacityToHex = function( opacity ) {
+		var newValue = Math.round((opacity / 100.0) * 0xFF);
+		var opacityHex = ("0"+newValue.toString(16)).substr(-2);
+		return "FFFFFF" + opacityHex;
 	}
 
 	AE2JSON.prototype.addInPointAll = function(fromAnimData,toAnimData,parentBoneName,inPoint,masterDuration){
@@ -313,6 +442,34 @@
 		}
 	}
 
+	AE2JSON.prototype.addInPoint = function(animEntry,inPoint,masterDuration,layer){
+		for (var prop in animEntry) {
+			if (animEntry[prop] instanceof Array ) {
+				var len = animEntry[prop].length;
+				if (len > 0 && animEntry[prop][0].hasOwnProperty("time") ) {
+					var i, startIndex=-1, endIndex=-1;
+					for (i=0; i<len; i++) {
+						var newTime = (animEntry[prop][i]["time"] += inPoint);
+						if (newTime >= 0 && startIndex == -1) {
+							startIndex = i;
+						}
+						if (newTime <= masterDuration ) {
+							endIndex = i;
+						}
+					}
+ 					if (endIndex != (len-1)) {
+						this.spliceKeyframesEnd( animEntry[prop], endIndex+1, inPoint, masterDuration, layer, prop );
+					}
+					if (startIndex > 0) {
+						this.spliceKeyframesStart( animEntry[prop], startIndex, inPoint, masterDuration, layer, prop );
+					}
+				}
+			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
+				this.addInPoint( animEntry[prop], inPoint, masterDuration, layer);
+			}
+		}
+		return true;
+	}
 
 	AE2JSON.prototype.flipRotations = function(animEntry,flipX,flipY){
 		for (var prop in animEntry) {
@@ -342,36 +499,6 @@
 			newAngle = (405 - angle) % 360;
 		}
 		return newAngle;
-	}
-
-	AE2JSON.prototype.addInPoint = function(animEntry,inPoint,masterDuration,layer){
-		for (var prop in animEntry) {
-			if (animEntry[prop] instanceof Array ) {
-				var len = animEntry[prop].length;
-				if (len > 0 && animEntry[prop][0].hasOwnProperty("time") ) {
-					var i, startIndex=-1, endIndex=-1;
-					for (i=0; i<len; i++) {
-						var newTime = (animEntry[prop][i]["time"] += inPoint);
-						if (newTime >= 0 && startIndex == -1) {
-							startIndex = i;
-						}
-						if (newTime <= masterDuration ) {
-							endIndex = i;
-						}
-					}
- 					if (endIndex != (len-1)) {
-//alert(layer.name+"\n"+prop+"\n"+(len-1)+"\n"+endIndex);
-						this.spliceKeyframesEnd( animEntry[prop], endIndex+1, inPoint, masterDuration, layer, prop );
-					}
-					if (startIndex > 0) {
-						this.spliceKeyframesStart( animEntry[prop], startIndex, inPoint, masterDuration, layer, prop );
-					}
-				}
-			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
-				this.addInPoint( animEntry[prop], inPoint, masterDuration, layer);
-			}
-		}
-		return true;
 	}
 
 	AE2JSON.prototype.spliceKeyframesEnd = function(animData,index,inPoint,masterDuration,layer,prop) {
@@ -418,9 +545,7 @@
 				animData[index]["time"] = masterDuration;
 				timeline = layer.transform.opacity_timeline;
 				timelineIndex = this.findTimelineIndexAfter( timeline, masterDuration-inPoint );
-				newValue = Math.round((timeline[timelineIndex][2] / 100.0) * 0xFF);
-				var opacityHex = ("0"+newValue.toString(16)).substr(-2);
-				animData[index]["color"] = "FFFFFF" + opacityHex;
+				animData[index]["color"] = this.opacityToHex(timeline[timelineIndex][2]);
 				break;
 		}
 		if (index < len-1) {
@@ -489,9 +614,7 @@
 				animData[0]["time"] = 0.0;
 				timeline = layer.transform.opacity_timeline;
 				timelineIndex = this.findTimelineIndexBefore( timeline, -inPoint );
-				newValue = Math.round((timeline[timelineIndex][2] / 100.0) * 0xFF);
-				var opacityHex = ("0"+newValue.toString(16)).substr(-2);
-				animData[0]["color"] = "FFFFFF" + opacityHex;
+				animData[0]["color"] = this.opacityToHex(timeline[timelineIndex][2]);
 				break;
 		}
 	}
@@ -520,8 +643,9 @@
 	 * @return Interpolated color.
 	 */
 	AE2JSON.prototype.argbInterpolate = function( A, B, t1, t2, newT ) {
-		var l = newT - t1;
 		var L = t2 - t1;
+		if (L==0) return A;
+		var l = (newT >= t1) ? ((newT <= t2) ? (newT - t1) : L) : 0;
 		var Aa = (A >> 24) & 0xff;
 		var Ar = (A >> 16) & 0xff;
 		var Ag = (A >> 8) & 0xff;
@@ -552,8 +676,9 @@
 	 * @return Interpolated coordinates.
 	 */
 	AE2JSON.prototype.xyInterpolate = function( A, B, t1, t2, newT ) {
-		var l = newT - t1;
 		var L = t2 - t1;
+		if (L==0) return A;
+		var l = (newT >= t1) ? ((newT <= t2) ? (newT - t1) : L) : 0;
 		return {
 			"x": A["x"] + (l * (B["x"]-A["x"])/L),
 			"y": A["y"] + (l * (B["y"]-A["y"])/L)
@@ -572,8 +697,9 @@
 	 * @return Interpolated value
 	 */
 	AE2JSON.prototype.interpolate = function( A, B, t1, t2, newT ) {
-		var l = newT - t1;
 		var L = t2 - t1;
+		if (L==0) return A;
+		var l = (newT >= t1) ? ((newT <= t2) ? (newT - t1) : L) : 0;
 		return A + (l * (B-A)/L);
 	}
 
@@ -742,7 +868,6 @@
 		this.rootScale = 1.0;
 		this.rootX = 0.0;
 		this.rootY = 0.0;
-//alert(JSON.stringify(layers[0].transform.position)); 
 		while( boneGenerated.length <= numLayers ) {
 			for (var i=0; i<numLayers; i++) {
 				var layer = layers[i];
@@ -785,6 +910,7 @@
 					};
 					if (layer.comp) {
 						boneData["comp"] = layer.comp;
+						boneData["blendingMode"] = layer.blendingMode;
 						boneData["inPoint"] = layer.inPoint;
 						boneData["outPoint"] = layer.outPoint;
 						boneData["anchorPoint"] = [
@@ -792,19 +918,15 @@
 							layer.transform.anchorPoint[0][1][1]
 						]
 					}
-					if (layer.transform.scale.length <= 1) {
-						if (Math.round(sx*10000) != 10000) {
-							boneData["scaleX"] = sx;
-						}
-						if (Math.round(sy*10000) != 10000) {
-							boneData["scaleY"] = sy;
-						}
+					if (Math.round(sx*10000) != 10000) {
+						boneData["scaleX"] = sx;
 					}
-					if (layer.transform.rotation.length <= 1) {
-						var rotation = layer.transform.rotation[0][1];
-						if (rotation != 0.0) {
-							boneData["rotation"] = 360-rotation;
-						}
+					if (Math.round(sy*10000) != 10000) {
+						boneData["scaleY"] = sy;
+					}
+					var rotation = layer.transform.rotation[0][1];
+					if (rotation != 0.0) {
+						boneData["rotation"] = 360-rotation;
 					}
 					boneNames[boneName] = true;
 					if (layer.enabled) {
@@ -944,6 +1066,7 @@
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
 			var boneName = this.makeSpineBoneName( layer );
+//alert(boneName+"\n"+layer.transform.opacity.length); 
 			if (layer.transform.opacity.length > 1) {
 				var colorTimeline = [];
 				numKeys = layer.transform.opacity.length;
@@ -953,7 +1076,8 @@
 					var opacityHex = ("0"+opacity.toString(16)).substr(-2);
 					var keyData = {
 						"time": frame * frameDuration,
-						"color": "FFFFFF" + opacityHex
+						"color": "FFFFFF" + opacityHex,
+						"opacity": opacity   // Must delete before output
 					};
 					var tangentType = layer.transform.opacity[j][2];
 					if (tangentType == "hold" || ((j<numKeys-1) && (layer.transform.opacity[j+1][0] == frame+1))) {
@@ -1102,8 +1226,8 @@
 						frame = layer.transform.scale[j][0];
 						var keyData = {
 							"time": frame * frameDuration,
-							"x": layer.transform.scale[j][1][0] / 100.0,
-							"y": layer.transform.scale[j][1][1] / 100.0
+							"x": 1 + (layer.transform.scale[j][1][0] - layer.transform.scale[0][1][0]) / 100.0,
+							"y": 1 + (layer.transform.scale[j][1][1] - layer.transform.scale[0][1][1]) / 100.0
 						};
 						var tangentType = layer.transform.scale[j][2];
 						if (tangentType == "hold") {
@@ -1117,12 +1241,12 @@
 				if (layer.transform.rotation.length > 1) {
 					var rotateTimeline = [];
 					numKeys = layer.transform.rotation.length;
-					var lastValue = 360 - layer.transform.rotation[0][1];
+					var lastValue = 360;
 					var lastTime = layer.transform.rotation[0][0] * frameDuration;
 					for (var j=0; j<numKeys; j++) {
 						var tangentType = layer.transform.rotation[j][2];
 						var time = layer.transform.rotation[j][0] * frameDuration;
-						var value = 360 - layer.transform.rotation[j][1];
+						var value = 360 - (layer.transform.rotation[j][1] - layer.transform.rotation[0][1]);
 						var delta = value - lastValue;
 						var steps = Math.floor(Math.abs(delta) / 180) + 1;
 						var dt = (time - lastTime) / steps;
@@ -1292,25 +1416,25 @@
 						prop = propGroup.property(j);
 						propName = prop.name;
 						propName = propName.toCamelCase();
-						group[propName] = this.setPropValues(prop,true);
-						group[propName+"_timeline"] = this.setPropValues(prop,false);
+						group[propName] = this.setPropValues(prop,true,layer.name,propName);
+						group[propName+"_timeline"] = this.setPropValues(prop,false,layer.name,propName);
 					}
 				}
 			} else {
-				this.objData[groupName] = this.setPropValues(propGroup,true);
-				this.objData[groupName+"_timeline"] = this.setPropValues(prop,false);
+				this.objData[groupName] = this.setPropValues(propGroup,true,layer.name,propName);
+				this.objData[groupName+"_timeline"] = this.setPropValues(prop,false,layer.name,propName);
 			}
 		}
 		//if(hasParent){layer.parent = parentLayer};
 	}
 
-	BaseObject.prototype.setPropValues = function(prop,asKeyframes){
+	BaseObject.prototype.setPropValues = function(prop,asKeyframes,layerName,propName){
 		var duration = this.compSettings.duration;
 		var frameDuration = this.compSettings.frameDuration;
 		var frameRate = this.compSettings.frameRate;
 		var timeSampleRate = 1.0/(frameRate*1);	//1.0/60.0;
 		var tollerance = 999; // 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes (using 999 to basically disable for now - too many keyframes)
-
+//if (propName == "opacity") alert(layerName+"\n"+propName+"\n"+prop.numKeys);
 		var timeValues = new Array();
 		if (asKeyframes) {
 			if (prop.numKeys > 1) {
@@ -1325,14 +1449,15 @@
 				} else {
 					for(keyIndex = 1; keyIndex <= prop.numKeys; keyIndex++) {
 						var keyTime = prop.keyTime(keyIndex);
-						if (keyIndex == 1 && keyTime > 0.0) {
-							var frame = 0;
-							var propVal = prop.valueAtTime(0.0, false);
-							var keyData = [frame, propVal,"hold"];
-							timeValues.push(keyData);
-						}
+						// Always add a keyframe at frame zero
+						// if (keyIndex == 1 && keyTime > 0.0) {
+						// 	var frame = 0;
+						// 	var propVal = prop.valueAtTime(0.0, false);
+						// 	var keyData = [frame, propVal,"hold"];
+						// 	timeValues.push(keyData);
+						// }
 						var frame = keyTime / frameDuration;
-						var propVal = prop.keyValue(keyIndex);
+						var propVal = prop.valueAtTime(keyTime, false);
 						var interpolation = prop.keyOutInterpolationType(keyIndex);
 						var keyData = [frame, propVal];
 						if (interpolation == KeyframeInterpolationType.HOLD) {
@@ -1382,6 +1507,14 @@
 								timeValues.push(keyData);
 							}
 						}
+					}
+				}
+				// Delete redundant key frames from the end
+				for (var i = timeValues.length-1; i>0; i--) {
+					if (equals(timeValues[i][1],timeValues[i-1][1])) {
+						timeValues.splice(i,1);
+					} else {
+						break;
 					}
 				}
 			} else {
@@ -1461,9 +1594,9 @@
 			var endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
 
 			// The time remap keyframe values only
-			this.objData["timeRemap"] = this.setPropValues( layer["timeRemap"], true );
+			this.objData["timeRemap"] = this.setPropValues(layer["timeRemap"],true,layer.name,"timeRemap");
 			var len = this.objData["timeRemap"].length;
-			this.objData["timeRemap"].sort( function(a,b) { return a[0] < b[0] ? -1 : 1; });
+			this.objData["timeRemap"].sort( function(a,b) { return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0); });
 			for (var i=0; i<len; i++) {
 				var frame = this.objData["timeRemap"][i][0];
 				time = Math.round( frame ) * frameDuration;
