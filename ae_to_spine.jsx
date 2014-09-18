@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 27
+	Version 28
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -85,7 +85,6 @@
 				this.defaultComp.compSettings = new CompSettings(this.comp);
 				this.defaultComp.layers = [];
 				this.doCompLayers(this.comp);
-//if (this.comp.name=="DustClouds") alert(JSON.stringify(this.defaultComp.layers));
 				this.compData[this.comp.name] = this.generateSpineData();
 			}
 		}
@@ -121,13 +120,15 @@
 				var compOutPoint = bone["outPoint"];
 				var compAnchorPoint = bone["anchorPoint"];
 				if (compInPoint < masterDuration && compOutPoint > 0) {
-					this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animation,masterDuration,compOutPoint,flipX,flipY,bone["blendingMode"]);
+					this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animation,
+						masterDuration,compOutPoint,flipX,flipY,bone["blendingMode"],bone["opacity"]);
 				}
 				if (animation["slots"][boneName]) {
 					delete animation["slots"][boneName];
 				}
 				delete bone["comp"];
 				delete bone["blendingMode"];
+				delete bone["opacity"];
 				delete bone["inPoint"];
 				delete bone["outPoint"];
 				delete bone["anchorPoint"];
@@ -157,7 +158,8 @@
 		}
 	}
 
-	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimation,masterDuration,compOutPoint,flipX,flipY,compBlendingMode){
+	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimation,
+		                                       masterDuration,compOutPoint,flipX,flipY,compBlendingMode,compOpacity){
 		// Make a copy first
 		compData = JSON.parse(JSON.stringify(compData));
 		//
@@ -179,6 +181,9 @@
 				}
 				if (newBoneData.hasOwnProperty("blendingMode") && newBoneData["blendingMode"] == BlendingMode.NORMAL) {
 					newBoneData["blendingMode"] = compBlendingMode;
+				}
+				if (newBoneData.hasOwnProperty["opacity"]) {
+					newBoneData["opacity"] = newBoneData["opacity"] * compOpacity/100.0;
 				}
 				if (newBoneData.parent == "root") {
 					newBoneData["x"] -= compAnchorPoint[0];
@@ -219,6 +224,11 @@
 			}
 			if (slotData["color"]) {
 				newSlotData["color"] = slotData["color"];
+				if (compOpacity < 100.0) {
+					newSlotData["color"] = this.opacityToHex( this.getOpacity(newSlotData["color"]) * compOpacity/100.0 );
+				}
+			} else if (compOpacity < 100.0) {
+				newSlotData["color"] = this.opacityToHex( compOpacity );
 			}
 			if (slotData["comp"]) {
 				newSlotData["comp"] = parentBoneName+"_"+slotData["comp"];
@@ -272,11 +282,17 @@
 		var colorAnimation = compAnimation["slots"][parentBoneName] && compAnimation["slots"][parentBoneName].hasOwnProperty("color") ? compAnimation["slots"][parentBoneName]["color"] : null;
 		var fromAnimData = compData["animations"]["animation"]["slots"];
 		var toAnimData = this.jsonData["animations"]["animation"]["slots"];
-//alert(parentBoneName+"\n"+JSON.stringify(colorAnimation,null,"\t"));
 		for (var name in fromAnimData) {
 			var animEntry = fromAnimData[name];
 			toAnimData[parentBoneName+"_"+name] = animEntry;
 			this.addInPoint( animEntry, compInPoint, masterDuration, animEntry["layer"] );
+			if (compOpacity < 100.0 && animEntry.hasOwnProperty("color")) {
+				for (var j=0; j<animEntry["color"].length; j++) {
+					var opacity = animEntry["color"][j]["opacity"] * compOpacity/100.0;
+					animEntry["color"][j]["opacity"] = opacity;
+					animEntry["color"][j]["color"] = this.opacityToHex( opacity );
+				}
+			}
 			// if (colorAnimation) {
 			// 	if (animEntry.hasOwnProperty("color") == false) {
 			// 		animEntry["color"] = JSON.parse(JSON.stringify(colorAnimation));
@@ -296,7 +312,14 @@
 					animEntry = toAnimData[name] = {};
 				}
 				if (!animEntry.hasOwnProperty("color")) {
-					animEntry["color"] = JSON.parse(JSON.stringify(colorAnimation));
+					animEntry["color"] = [];
+					for (var j=0; j<colorAnimation.length; j++) {
+						animEntry["color"].push( {
+							"time": colorAnimation[j]["time"],
+							"color": this.opacityToHex( colorAnimation[j]["opacity"] * compOpacity/100.0 ),
+							"opacity": colorAnimation[j]["opacity"]
+						})
+					}
 				} else {
 					var numColors = animEntry["color"].length;
 					var compColors = colorAnimation.length;
@@ -315,7 +338,7 @@
 						var newColorEntry = {};
 
 						if (colorEntry["time"] == compEntry["time"] || j >= numColors || k >= compColors) {
-							opacity = (colorEntry["opacity"]/255.0) * compEntry["opacity"];
+							opacity = (colorEntry["opacity"]/100.0) * compEntry["opacity"];
 							newColorEntry["time"] = colorEntry["time"] > compEntry["time"] ? colorEntry["time"] : compEntry["time"];
 // newColorEntry["debug"] = "equal";
 // alert("EQUAL\n"+"K "+k+" "+compEntry["time"]+"\n"+"J "+j+" "+colorEntry["time"]+"\n");
@@ -326,7 +349,7 @@
 							var prev = compEntry;
 							var next = colorAnimation[k+1<compColors?k+1:compColors-1];
 							opacity = this.interpolate( prev["opacity"], next["opacity"], prev["time"], next["time"], colorEntry["time"] );
-							opacity = (compEntry["opacity"]/255.0) * opacity;
+							opacity = (compEntry["opacity"]/100.0) * opacity;
 							newColorEntry["time"] = colorEntry["time"];
 // newColorEntry["debug"] = "j ahead";
 // alert("J AHEAD\n"+"K "+k+" "+compEntry["time"]+"\n"+"J "+j+" "+colorEntry["time"]+"\n");
@@ -336,7 +359,7 @@
 							var prev = colorEntry;
 							var next = animEntry["color"][j+1<numColors?j+1:numColors-1];
 							opacity = this.interpolate( prev["opacity"], next["opacity"], prev["time"], next["time"], colorEntry["time"] );
-							opacity = (compEntry["opacity"]/255.0) * opacity;
+							opacity = (compEntry["opacity"]/100.0) * opacity;
 							newColorEntry["time"] = colorEntry["time"];
 // newColorEntry["debug"] = "k ahead";
 // alert("K AHEAD\n"+"K "+k+" "+compEntry["time"]+"\n"+"J "+j+" "+colorEntry["time"]+"\n");
@@ -413,16 +436,8 @@
 		return animData[i>0?i:0];
 	}
 
-	AE2JSON.prototype.multiplyOpacity = function( rgbaString1, rgbaString2 ) {
-		var op1 = this.getOpacity(rgbaString1);
-		var op2 = this.getOpacity(rgbaString2);
-		var opacity = op1 * op2;
-		var opacityHex = ("0"+opacity.toString(16)).substr(-2);
-		return "FFFFFF" + opacityHex;
-	}
-
 	AE2JSON.prototype.getOpacity = function( rgbaString ) {
-		return parseInt("0x"+rgbaString.substr(-2)) / 255.0;
+		return (parseInt("0x"+rgbaString.substr(-2)) / 255.0) * 100.0;
 	}
 
 	AE2JSON.prototype.opacityToHex = function( opacity ) {
@@ -911,6 +926,7 @@
 					if (layer.comp) {
 						boneData["comp"] = layer.comp;
 						boneData["blendingMode"] = layer.blendingMode;
+						boneData["opacity"] = (layer.transform.opacity.length == 1) ? layer.transform.opacity[0][1] : 100.0;
 						boneData["inPoint"] = layer.inPoint;
 						boneData["outPoint"] = layer.outPoint;
 						boneData["anchorPoint"] = [
@@ -1012,10 +1028,9 @@
 					if (layer.blendingMode != BlendingMode.NORMAL) {
 						slotData["additive"] = true;
 					}
-					var opacity = Math.round((layer.transform.opacity[0][1] / 100.0) * 0xFF);
-					if (opacity != 0xFF) {
-						var opacityHex = ("0"+opacity.toString(16)).substr(-2);
-						slotData["color"] = "FFFFFF" + opacityHex;
+					var opacity = layer.transform.opacity[0][1];
+					if (opacity < 100.0) {
+						slotData["color"] = this.opacityToHex( opacity );
 					}
 					slotsData.push( slotData );
 				}
@@ -1066,17 +1081,15 @@
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
 			var boneName = this.makeSpineBoneName( layer );
-//alert(boneName+"\n"+layer.transform.opacity.length); 
 			if (layer.transform.opacity.length > 1) {
 				var colorTimeline = [];
 				numKeys = layer.transform.opacity.length;
 				for (var j=0; j<numKeys; j++) {
 					frame = layer.transform.opacity[j][0];
-					var opacity = Math.round((layer.transform.opacity[j][1] / 100.0) * 255.0);
-					var opacityHex = ("0"+opacity.toString(16)).substr(-2);
+					var opacity = layer.transform.opacity[j][1];
 					var keyData = {
 						"time": frame * frameDuration,
-						"color": "FFFFFF" + opacityHex,
+						"color": this.opacityToHex( opacity ),
 						"opacity": opacity   // Must delete before output
 					};
 					var tangentType = layer.transform.opacity[j][2];
