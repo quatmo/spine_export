@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 28
+	Version 29
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -935,9 +935,11 @@
 						]
 					}
 					if (Math.round(sx*10000) != 10000) {
+						if (sx < 0.001 && sx > -0.001) sx = sx < 0.0 ? -0.001 : 0.001;
 						boneData["scaleX"] = sx;
 					}
 					if (Math.round(sy*10000) != 10000) {
+						if (sy < 0.001 && sy > -0.001) sy = sy < 0.0 ? -0.001 : 0.001;
 						boneData["scaleY"] = sy;
 					}
 					var rotation = layer.transform.rotation[0][1];
@@ -1235,12 +1237,16 @@
 				if (layer.transform.scale.length > 1) {
 					var scaleTimeline = [];
 					numKeys = layer.transform.scale.length;
+					var sx = layer.transform.scale[0][1][0] / 100.0;
+					if (sx < 0.001 && sx > -0.001) sx = sx < 0.0 ? -0.001 : 0.001;
+					var sy = layer.transform.scale[0][1][1] / 100.0;
+					if (sy < 0.001 && sy > -0.001) sy = sy < 0.0 ? -0.001 : 0.001;
 					for (var j=0; j<numKeys; j++) {
 						frame = layer.transform.scale[j][0];
 						var keyData = {
 							"time": frame * frameDuration,
-							"x": 1 + (layer.transform.scale[j][1][0] - layer.transform.scale[0][1][0]) / 100.0,
-							"y": 1 + (layer.transform.scale[j][1][1] - layer.transform.scale[0][1][1]) / 100.0
+							"x": (layer.transform.scale[j][1][0]/100.0) / sx,
+							"y": (layer.transform.scale[j][1][1]/100.0) / sy
 						};
 						var tangentType = layer.transform.scale[j][2];
 						if (tangentType == "hold") {
