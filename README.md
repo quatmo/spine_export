@@ -6,6 +6,8 @@ Migrate Spine data
 -------------------------
 Starting with Spine version 2.0, the way that scale timeline values are computed changed.  This python script updates any spine json file below version 2.0.0 and regenerates the scale timelines.  Currently, it does not preserve the pretty formatting that Spine outputs.  The script is designed to accomodate additional migrations in the future.  The script can be run multiple times without ill effect.
 
+***Note on Zero-Scale bones***: Bones with a zero for scale will use 0.001 as their scale, and the scale timeline will be adjusted accordingly.  If the bone itself has zero for scale, nothing on the timeline can affect it.
+
 
 After Effects Export with ae_to_spine.jsx
 -------------------------
