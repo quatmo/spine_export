@@ -60,7 +60,7 @@ def migrate_file( name ):
 		except ValueError as e:
 			warning("Error reading json from file",name)
 			spine_data = None
-		if spine_data is not None and "skeleton" in spine_data:
+		if spine_data is not None and "bones" in spine_data and "slots" in spine_data:
 			change_count += migrate( spine_data )
 	# If any changes were made, overwrite the file
 	if change_count > 0:
@@ -75,7 +75,7 @@ def migrate_file( name ):
 	return change_count
 
 def migrate( spine_data ):
-	version = get_version( spine_data["skeleton"]["spine"] )
+	version = get_version( spine_data["skeleton"]["spine"] ) if "skeleton" in spine_data else (1,0,0)
 	change_count = 0
 	if version < (2,0,0):
 		change_count += migrate_2_0_0( spine_data )
@@ -89,34 +89,38 @@ def migrate_2_0_0( spine_data ):
 			for bone_name in animation_data["bones"]:
 				bone_animation_data = spine_data["animations"][animation_name]["bones"][bone_name]
 				if "scale" in bone_animation_data:
-					change_count = change_count + 1
 					bone_data = filter( lambda x: x["name"] == bone_name, spine_data["bones"])[0]
 					# Get the bone's scale and don't let it get below 0.001
 					bone_scale_x = bone_data["scaleX"] if "scaleX" in bone_data else 1.0
 					bone_scale_y = bone_data["scaleY"] if "scaleY" in bone_data else 1.0
-					# Replace the values on the timeline with the final scale values first
-					for scale_keyframe in bone_animation_data["scale"]:
-						scale_keyframe["x"] = scale_keyframe["x"] + bone_scale_x - 1
-						scale_keyframe["y"] = scale_keyframe["y"] + bone_scale_y - 1
-					# Don't let the bone go below scale 0.001
-					if bone_scale_x < 0.001 and bone_scale_x > -0.001:
-						if bone_scale_x < 0.0:
-							bone_scale_x = 0.001
-						else:
-							bone_scale_x = -0.001
-						bone_data["scaleX"] = bone_scale_x
-					if bone_scale_y < 0.001 and bone_scale_y > -0.001:
-						if bone_scale_y < 0.0:
-							bone_scale_y = 0.001
-						else:
-							bone_scale_y = -0.001
-						bone_data["scaleY"] = bone_scale_y
-					# Replace the values on the timeline with values relative to the bone scale
-					for scale_keyframe in bone_animation_data["scale"]:
-						scale_keyframe["x"] = scale_keyframe["x"] / bone_scale_x
-						scale_keyframe["y"] = scale_keyframe["y"] / bone_scale_y
+					if bone_scale_x != 1.0 or bone_scale_y != 1.0:
+						change_count = change_count + 1
+						# Replace the values on the timeline with the final scale values first
+						for scale_keyframe in bone_animation_data["scale"]:
+							scale_keyframe["x"] = scale_keyframe["x"] + bone_scale_x - 1
+							scale_keyframe["y"] = scale_keyframe["y"] + bone_scale_y - 1
+						# Don't let the bone go below scale 0.001
+						if bone_scale_x < 0.001 and bone_scale_x > -0.001:
+							if bone_scale_x < 0.0:
+								bone_scale_x = 0.001
+							else:
+								bone_scale_x = -0.001
+							bone_data["scaleX"] = bone_scale_x
+						if bone_scale_y < 0.001 and bone_scale_y > -0.001:
+							if bone_scale_y < 0.0:
+								bone_scale_y = 0.001
+							else:
+								bone_scale_y = -0.001
+							bone_data["scaleY"] = bone_scale_y
+						# Replace the values on the timeline with values relative to the bone scale
+						for scale_keyframe in bone_animation_data["scale"]:
+							scale_keyframe["x"] = scale_keyframe["x"] / bone_scale_x
+							scale_keyframe["y"] = scale_keyframe["y"] / bone_scale_y
 	if change_count > 0:
-		spine_data["skeleton"]["spine"] = "2.0.0"
+		if "skeleton" in spine_data:
+			spine_data["skeleton"]["spine"] = "2.0.0"
+		else:
+			spine_data["skeleton"] = { "spine": "2.0.0", "width": 0, "height": 0, "hash":"" }
 	return change_count
 
 def get_version(version_string):
