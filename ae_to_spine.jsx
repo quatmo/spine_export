@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 29
+	Version 32
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -91,10 +91,115 @@
 
 		this.jsonData = this.compData[this.activeComp];
 		this.combineComps();
+		this.processFlips();
 
 		this.renderJSON(saveToFile);
 
 		this.proj.timeDisplayType = this.orgTimeDisplayType;
+	}
+
+	AE2JSON.prototype.processFlips = function(boneName){
+		if (boneName == undefined) {
+			boneName = "root";
+		}
+		var bone = this.getBone(boneName);
+		var flipX = bone.hasOwnProperty("scaleX") && (bone["scaleX"] < 0);
+		var flipY = bone.hasOwnProperty("scaleY") && (bone["scaleY"] < 0);
+		var animation = this.getBoneAnimation(boneName);
+		if (animation && animation.hasOwnProperty("scale")) {
+			var scaleAnim = animation["scale"];
+			if (scaleAnim.length > 0) {
+				flipX = scaleAnim[0]["x"] < 0;
+				flipY = scaleAnim[0]["y"] < 0;
+			}
+		}
+		var children = this.getAllChildBones(boneName);
+		if (flipX != flipY) {
+			this.flipBone(bone,flipX,flipY);
+			if (children) {
+				for (var i=0; i<children.length; i++) {
+					this.flipBone( children[i], flipX, flipY );
+				}
+			}
+		}
+		if (children) {
+			for (var i=0; i<children.length; i++) {
+				this.processFlips(children[i]["name"]);
+			}
+		}
+	}
+
+	AE2JSON.prototype.flipBone = function(bone,flipX,flipY){
+		if (bone.hasOwnProperty("rotation") == false) {
+			bone["rotation"] = 0.0;
+		}
+		this.flipRotations(bone,flipX,flipY)
+		var animation = this.getBoneAnimation(bone["name"]);
+		if (animation) {
+			this.flipRotations(animation,flipX,flipY);
+		}
+
+		if (bone["rotation"] == 0.0) {
+			delete bone["rotation"];
+		}
+	}
+
+	AE2JSON.prototype.flipRotations = function(animEntry,flipX,flipY){
+		for (var prop in animEntry) {
+			if (animEntry[prop] instanceof Array ) {
+				var len = animEntry[prop].length;
+				if (len > 0 && animEntry[prop][0].hasOwnProperty("angle") ) {
+					for (i=0; i<len; i++) {
+						animEntry[prop][i]["angle"] = this.flipRotation( animEntry[prop][i]["angle"], flipX, flipY );
+					}
+				}
+			} else if (prop == "rotation") {
+				animEntry["rotation"] = this.flipRotation( animEntry["rotation"], flipX, flipY );
+			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
+				this.flipRotations( animEntry[prop], flipX, flipY );
+			}
+		}
+	}
+
+	AE2JSON.prototype.flipRotation = function(angle,flipX,flipY){
+		var newAngle = angle;
+		if (flipX != flipY) {
+			newAngle = (360 - angle) % 360;
+		}
+		return newAngle;
+	}
+
+	AE2JSON.prototype.getBoneAnimation = function(boneName){
+		var animation = this.jsonData["animations"]["animation"]["bones"];
+		if (animation.hasOwnProperty(boneName)) {
+			return animation[boneName];
+		} else {
+			return null;
+		}
+	}
+
+	AE2JSON.prototype.getBone = function(boneName){
+		for (var i=0; i<this.jsonData.bones.length; i++) {
+			var bone = this.jsonData.bones[i];
+			if (bone["name"] == boneName) {
+				return bone;
+			}
+		}
+		return null;
+	}
+
+	AE2JSON.prototype.getAllChildBones = function(parentBoneName, bones){
+		if (bones == undefined) {
+			bones = [];
+		}
+		for (var i=0; i<this.jsonData.bones.length; i++) {
+			var bone = this.jsonData.bones[i];
+			if (bone.hasOwnProperty("parent") && bone["parent"] == parentBoneName) {
+				bones.push(bone);
+				this.getAllChildBones( bone["name"], bones );
+			}
+		}
+		return bones;
 	}
 
 	AE2JSON.prototype.combineComps = function(){
@@ -106,22 +211,13 @@
 				var bone = this.jsonData.bones[i];
 				var boneName = bone["name"];
 				var compName = bone["comp"];
-				var flipX = (bone.hasOwnProperty("scaleX") && (bone["scaleX"] < 0));
-				var flipY = bone.hasOwnProperty("scaleY") && (bone["scaleY"] < 0);
-				if (animation["bones"].hasOwnProperty(boneName) && animation["bones"][boneName].hasOwnProperty("scale")) {
-					var scaleAnim = animation["bones"][boneName]["scale"];
-					if (scaleAnim.length > 0) {
-						flipX = scaleAnim[0]["x"] < 0;
-						flipY = scaleAnim[0]["y"] < 0;
-					}
-				}
 				var compData = this.compData[ compName ]
 				var compInPoint = bone["inPoint"];
 				var compOutPoint = bone["outPoint"];
 				var compAnchorPoint = bone["anchorPoint"];
 				if (compInPoint < masterDuration && compOutPoint > 0) {
 					this.copyCompData(boneName,compName,compData,compInPoint,compAnchorPoint,animation,
-						masterDuration,compOutPoint,flipX,flipY,bone["blendingMode"],bone["opacity"]);
+						masterDuration,compOutPoint,bone["blendingMode"],bone["opacity"]);
 				}
 				if (animation["slots"][boneName]) {
 					delete animation["slots"][boneName];
@@ -159,7 +255,7 @@
 	}
 
 	AE2JSON.prototype.copyCompData = function(parentBoneName,compName,compData,compInPoint,compAnchorPoint,compAnimation,
-		                                       masterDuration,compOutPoint,flipX,flipY,compBlendingMode,compOpacity){
+		                                       masterDuration,compOutPoint,compBlendingMode,compOpacity){
 		// Make a copy first
 		compData = JSON.parse(JSON.stringify(compData));
 		//
@@ -410,12 +506,6 @@
 		// Copy bone animation data
 		//
 		this.addInPointAll( compData["animations"]["animation"]["bones"], this.jsonData["animations"]["animation"]["bones"], parentBoneName, compInPoint, masterDuration );
-		//
-		// Process any flips
-		//
-		if (flipX || flipY) {
-			this.flipRotations( compData, flipX, flipY );
-		}
 	}
 
 	AE2JSON.prototype.findEntryBeforeTime = function( animData, time ) {
@@ -484,36 +574,6 @@
 			}
 		}
 		return true;
-	}
-
-	AE2JSON.prototype.flipRotations = function(animEntry,flipX,flipY){
-		for (var prop in animEntry) {
-			if (animEntry[prop] instanceof Array ) {
-				var len = animEntry[prop].length;
-				if (len > 0 && animEntry[prop][0].hasOwnProperty("angle") ) {
-					for (i=0; i<len; i++) {
-						//animEntry[prop][i]["oangle"] = animEntry[prop][i]["angle"];
-						animEntry[prop][i]["angle"] = this.flipRotation( animEntry[prop][i]["angle"], flipX, flipY );
-					}
-				}
-			} else if (prop == "rotation") {
-				animEntry["rotation"] = this.flipRotation( animEntry["rotation"], flipX, flipY );
-			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
-				this.flipRotations( animEntry[prop], flipX, flipY );
-			}
-		}
-	}
-
-	AE2JSON.prototype.flipRotation = function(angle,flipX,flipY){
-		var newAngle = angle;
-		if (flipX && flipY) {
-			newAngle = (angle + 180) % 360;
-		} else if (flipX) {
-			newAngle = (360 - angle) % 360;
-		} else if (flipY) {
-			newAngle = (405 - angle) % 360;
-		}
-		return newAngle;
 	}
 
 	AE2JSON.prototype.spliceKeyframesEnd = function(animData,index,inPoint,masterDuration,layer,prop) {
@@ -612,7 +672,7 @@
 				timeline = layer.transform.rotation_timeline;
 				timelineIndex = this.findTimelineIndexBefore( timeline, -inPoint );
 				newValue = timeline[timelineIndex][2];
-				animData[0]["angle"] = (360 - newValue) % 360;
+				animData[0]["angle"] = -newValue;
 				break;
 			case "scale":
 				animData[0]["time"] = 0.0;
@@ -942,9 +1002,9 @@
 						if (sy < 0.001 && sy > -0.001) sy = sy < 0.0 ? -0.001 : 0.001;
 						boneData["scaleY"] = sy;
 					}
-					var rotation = layer.transform.rotation[0][1];
+					var rotation = (360-layer.transform.rotation[0][1])%360;
 					if (rotation != 0.0) {
-						boneData["rotation"] = 360-rotation;
+						boneData["rotation"] = rotation;
 					}
 					boneNames[boneName] = true;
 					if (layer.enabled) {
@@ -1260,12 +1320,12 @@
 				if (layer.transform.rotation.length > 1) {
 					var rotateTimeline = [];
 					numKeys = layer.transform.rotation.length;
-					var lastValue = 360;
+					var lastValue = 0;
 					var lastTime = layer.transform.rotation[0][0] * frameDuration;
 					for (var j=0; j<numKeys; j++) {
 						var tangentType = layer.transform.rotation[j][2];
 						var time = layer.transform.rotation[j][0] * frameDuration;
-						var value = 360 - (layer.transform.rotation[j][1] - layer.transform.rotation[0][1]);
+						var value = (layer.transform.rotation[0][1] - layer.transform.rotation[j][1]);
 						var delta = value - lastValue;
 						var steps = Math.floor(Math.abs(delta) / 180) + 1;
 						var dt = (time - lastTime) / steps;
@@ -1273,7 +1333,10 @@
 						for (var k=1; k<=steps; k++) {
 							var keyData = {
 								"time": lastTime + (dt * k),
-								//"rotation": layer.transform.rotation[j][1],
+								// "rotation": layer.transform.rotation[j][1],
+								// "delta": delta*steps,
+								// "steps": steps,
+								// "k": k,
 								"angle": (lastValue + (delta * k)) % 360
 							};
 							if (tangentType == "hold") {
