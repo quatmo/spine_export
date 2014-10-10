@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 32
+	Version 35
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -59,43 +59,85 @@
 	}
 
 	function AE2JSON(thisObj,saveToFile) {
-		if (app.project.file == null) {
-			alert("Please save this project file first, then run again.")
+		this.saveToFile = saveToFile;
+
+		this.showUI();
+
+		this.initializeCompositions();
+
+		this.progressWindow = new Window("palette","Export Spine",undefined,{"closeButton":false});
+		this.progressBar = this.progressWindow.add("progressbar",undefined,0,this.numLayers);
+		this.progressWindow.show();
+
+		this.processCompositions();
+	}
+
+	AE2JSON.prototype.showUI = function(){
+		var w = new Window("dialog","Export Spine",undefined,{"closeButton":false});
+		var checkbox = w.add("checkbox",undefined,"Generate Intermediate Keyframes");
+		var suffixGroup = w.add("group");
+		suffixGroup.add("statictext",undefined,"Filename Suffix:");
+		var suffix = suffixGroup.add("edittext",undefined,"_spine");
+		suffix.characters = 10;
+		var buttons = w.add ("group");
+		buttons.add ("button", undefined, "Export", {name: "ok"});
+		buttons.add ("button", undefined, "Cancel");
+		if (w.show() != 1) {
 			return;
 		}
+		this.intermediateKeyframes = checkbox.value;
+		this.filenameSuffix = suffix.text;
+	}
 
+	AE2JSON.prototype.progress = function(){
+		var progress = ++this.progressBar.value;
+		this.progressWindow.close();
+		this.progressWindow = new Window("palette","Export Spine",undefined,{"closeButton":false});
+		this.progressBar = this.progressWindow.add("progressbar",undefined,progress,this.numLayers);
+		this.progressWindow.show();
+	}
+
+	AE2JSON.prototype.initializeCompositions = function(){
 		this.proj = app.project;
+		this.orgTimeDisplayType = this.proj.timeDisplayType;
+		this.proj.timeDisplayType = TimeDisplayType.FRAMES;
+
+		this.numLayers = 0;
 		this.masterComp = app.project.activeItem;
 		this.referencedComps = [this.masterComp];
 		this.activeComp = app.project.activeItem.name;
-		this.compBones = [];
 		this.compData = {};
-		while (this.referencedComps.length > 0) {
-			this.comp = this.referencedComps.shift();
-			if (!this.compData[this.comp.name]) {
+		var i=0;
+		while (i < this.referencedComps.length) {
+			var comp = this.referencedComps[i];
+			if (!this.compData[comp.name]) {
 				this.jsonData = {};
 				this.jsonData.projectSettings = {};
-				this.jsonData.compositions = [];
-				this.jsonData.compositions[0] = {};
-				// create defaultComp until we export all project compositions
-				// and not just the current comp.
-				this.defaultComp = this.jsonData.compositions[0];
-				this.orgTimeDisplayType = this.proj.timeDisplayType;
-				this.proj.timeDisplayType = TimeDisplayType.FRAMES;
-				this.defaultComp.compSettings = new CompSettings(this.comp);
-				this.defaultComp.layers = [];
-				this.doCompLayers(this.comp);
-				this.compData[this.comp.name] = this.generateSpineData();
+				this.jsonData.composition = {};
+				this.jsonData.composition.compSettings = new CompSettings(comp);
+				this.jsonData.composition.layers = [];
+				this.doCompLayers(comp);
+				this.compData[comp.name] = this.jsonData;
+				this.numLayers += this.compData[comp.name].composition.layers.length;
 			}
+			this.numLayers += this.compData[comp.name].composition.layers.length;
+			i++;
+		}
+
+		this.proj.timeDisplayType = this.orgTimeDisplayType;
+	}
+
+	AE2JSON.prototype.processCompositions = function(){
+		for (var compName in this.compData) {
+			this.jsonData = this.compData[compName];
+			this.compData[compName] = this.generateSpineData();
 		}
 
 		this.jsonData = this.compData[this.activeComp];
-		this.combineComps();
+		this.combineCompositions();
 		this.processFlips();
 
-		this.renderJSON(saveToFile);
-
-		this.proj.timeDisplayType = this.orgTimeDisplayType;
+		this.renderJSON(this.saveToFile);
 	}
 
 	AE2JSON.prototype.processFlips = function(boneName){
@@ -202,11 +244,12 @@
 		return bones;
 	}
 
-	AE2JSON.prototype.combineComps = function(){
+	AE2JSON.prototype.combineCompositions = function(){
 		var masterDuration = this.masterComp.duration;
 		var animation = this.jsonData["animations"]["animation"];
 		var i=0;
 		while (i < this.jsonData.bones.length) {
+			this.progress();
 			if (this.jsonData.bones[i].hasOwnProperty("comp")) {
 				var bone = this.jsonData.bones[i];
 				var boneName = bone["name"];
@@ -809,19 +852,19 @@
 					layerType = this.checkLayerType(myLayer);
 					switch(layerType){
 						case "NULL":
-							this.defaultComp.layers.push(new Null(this.defaultComp.compSettings, myLayer));
+							this.jsonData.composition.layers.push(new Null(this.jsonData.composition.compSettings, myLayer));
 							break;
 						case "AV":
-							this.defaultComp.layers.push(new AV(this.defaultComp.compSettings, myLayer));
+							this.jsonData.composition.layers.push(new AV(this.jsonData.composition.compSettings, myLayer));
 							if (myLayer.source instanceof CompItem) {
 								this.referencedComps.push(myLayer.source)
 							}
 							break;
 						case "SHAPE":
-							this.defaultComp.layers.push(new ShapeObj(this.defaultComp.compSettings, myLayer));
+							this.jsonData.composition.layers.push(new ShapeObj(this.jsonData.composition.compSettings, myLayer));
 							break;
 						default:
-							this.defaultComp.layers.push("unknown "+getObjectClass(myLayer));
+							this.jsonData.composition.layers.push("unknown "+getObjectClass(myLayer));
 							break;
 					}
 				}
@@ -834,7 +877,7 @@
 		if (layer.parent > 0) {
 			var baseNameRegex = /^([A-Za-z ]+)[0-9]+.*$/;
 			var baseName = layerName.replace(baseNameRegex,"$1");
-			var layers = this.defaultComp.layers;
+			var layers = this.jsonData.composition.layers;
 			var numLayers = layers.length;
 			for (var i=0; i<numLayers; i++) {
 				var otherLayer = layers[i];
@@ -864,14 +907,13 @@
 		if (sourceName == null) {
 			return null;
 		} else {
-			var projectName = app.project.file.name.replace(/\.aep/,'');
 			var attachmentName = sourceName.replace(/([^\.]+).*/,"$1");
 			attachmentName = attachmentName
 				.replace(/_L[0-9]+$/,'')
 				.replace(/ /g,'_')
 				.replace(/\.[A-Za-z\.]+$/,'');
 			// return sourceName.replace(/([^\/]+)\/([^\.]+).*/,"$2-assets/$1").replace(/_L[0-9]+$/,'').replace(/ /g,'_');
-			return projectName+"-assets/"+attachmentName;
+			return this.activeComp+"-assets/"+attachmentName;
 		}
 	}
 
@@ -935,7 +977,7 @@
 
 	AE2JSON.prototype.generateSpineBones = function() {
 		var bonesData = [ { "name": "root" } ];
-		var layers = this.defaultComp.layers;
+		var layers = this.jsonData.composition.layers;
 		var numLayers = layers.length;
 		var boneNames = {};
 		var boneGenerated = new Array();
@@ -945,6 +987,7 @@
 		this.rootY = 0.0;
 		while( boneGenerated.length <= numLayers ) {
 			for (var i=0; i<numLayers; i++) {
+				this.progress();
 				var layer = layers[i];
 				var boneName = this.makeSpineBoneName( layer );
 				var parentExists = false;
@@ -1062,7 +1105,7 @@
 
 	AE2JSON.prototype.generateSpineSlots = function() {
 		var slotsData = [];
-		var layers = this.defaultComp.layers;
+		var layers = this.jsonData.composition.layers;
 		var numLayers = layers.length;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
@@ -1103,7 +1146,7 @@
 
 	AE2JSON.prototype.generateSpineSkins = function() {
 		var skinsData = {};
-		var layers = this.defaultComp.layers;
+		var layers = this.jsonData.composition.layers;
 		var numLayers = layers.length;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
@@ -1135,11 +1178,11 @@
 
 	AE2JSON.prototype.generateSpineSlotAnimations = function() {
 		var slotAnimData = {};
-		var layers = this.defaultComp.layers;
+		var layers = this.jsonData.composition.layers;
 		var numLayers = layers.length;
 		var numKeys, time;
-		var frameDuration = 1.0/30.0;	//this.defaultComp.compSettings.frameDuration;
-		var compDuration = this.defaultComp.compSettings.duration;
+		var frameDuration = 1.0/30.0;	//this.jsonData.composition.compSettings.frameDuration;
+		var compDuration = this.jsonData.composition.compSettings.duration;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
 			var boneName = this.makeSpineBoneName( layer );
@@ -1260,10 +1303,10 @@
 
 	AE2JSON.prototype.generateSpineBoneAnimations = function() {
 		var boneAnimData = {};
-		var layers = this.defaultComp.layers;
+		var layers = this.jsonData.composition.layers;
 		var numLayers = layers.length;
 		var numKeys, time;
-		var frameDuration = 1.0/30.0;	//this.defaultComp.compSettings.frameDuration;
+		var frameDuration = 1.0/30.0;	//this.jsonData.composition.compSettings.frameDuration;
 		for (var i=numLayers-1; i>=0; i--) {
 			var layer = layers[i];
 			if (layer.enabled) {
@@ -1359,7 +1402,7 @@
 	}
 
 	AE2JSON.prototype.generateSpineData = function() {
-		var layers = this.defaultComp.layers;
+		var layers = this.jsonData.composition.layers;
 		var numLayers = layers.length;
 		var bonesData = this.generateSpineBones();
 		var slotsData = this.generateSpineSlots();
@@ -1382,11 +1425,9 @@
 
 
 	AE2JSON.prototype.renderJSON = function(toFile) {
-		var projectName, compName, filename, jsonExportFile, jsonString;
 		// create JSON file.
-		projectName = app.project.file.name.replace(".aep", '');
-		compName    = app.project.activeItem.name;
-		fileName    = projectName + "_"+ compName + ".json";
+		var compName    = app.project.activeItem.name;
+		var fileName    = compName + this.filenameSuffix + ".json";
 		fileName    = fileName.replace(/\s/g, '');
 
 		var path = app.project.file.parent.absoluteURI + "/";
@@ -1396,10 +1437,10 @@
 		// this.addMatrixData();
 		// this.jsonData = this.generateBCGAnimationData();
 
-		jsonString = JSON.stringify(this.jsonData, null, "\t");
+		var jsonString = JSON.stringify(this.jsonData, null, "\t");
 		if (toFile == true) {
 			delete this.jsonData;
-			jsonExportFile = new File(fullPath);
+			var jsonExportFile = new File(fullPath);
 			jsonExportFile.open("w");
 			jsonExportFile.write(jsonString);
 			jsonExportFile.close();
@@ -1516,7 +1557,9 @@
 		var frameRate = this.compSettings.frameRate;
 		var timeSampleRate = 1.0/(frameRate*1);	//1.0/60.0;
 		var tollerance = 999; // 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes (using 999 to basically disable for now - too many keyframes)
-//if (propName == "opacity") alert(layerName+"\n"+propName+"\n"+prop.numKeys);
+		if (this.intermediateKeyframes) {
+			tollerance = 1/15.0;
+		}
 		var timeValues = new Array();
 		if (asKeyframes) {
 			if (prop.numKeys > 1) {
@@ -1704,5 +1747,10 @@
 		this.objData.blendingMode = layer.blendingMode;
 	}
 
-	new AE2JSON(this,true);
+	if (app.project.file == null) {
+		alert("Please save this project file first, then run again.")
+	} else {
+		new AE2JSON(this,true);
+	}
+
 }
