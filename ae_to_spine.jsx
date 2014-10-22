@@ -1,7 +1,7 @@
 {
 /*
 	Export After Effects to Spine JSON
-	Version 35
+	Version 36
 
 	Script for exporting After Effects animations as Spine JSON.
 	For use with Spine from Esoteric Software.
@@ -59,34 +59,42 @@
 	}
 
 	function AE2JSON(thisObj,saveToFile) {
-		this.saveToFile = saveToFile;
+		if (this.showInitialDialog()) {
+			this.initializeCompositions();
 
-		this.showUI();
+			this.progressWindow = new Window("palette","Export Spine",undefined,{"closeButton":false});
+			this.progressBar = this.progressWindow.add("progressbar",undefined,0,this.numLayers);
+			this.progressWindow.show();
 
-		this.initializeCompositions();
+			this.processCompositions();
 
-		this.progressWindow = new Window("palette","Export Spine",undefined,{"closeButton":false});
-		this.progressBar = this.progressWindow.add("progressbar",undefined,0,this.numLayers);
-		this.progressWindow.show();
+			this.renderJSON(saveToFile);
 
-		this.processCompositions();
+			this.progressWindow.close();
+			this.showCompleteDialog();
+		}
 	}
 
-	AE2JSON.prototype.showUI = function(){
+	AE2JSON.prototype.showInitialDialog = function(){
 		var w = new Window("dialog","Export Spine",undefined,{"closeButton":false});
-		var checkbox = w.add("checkbox",undefined,"Generate Intermediate Keyframes");
-		var suffixGroup = w.add("group");
-		suffixGroup.add("statictext",undefined,"Filename Suffix:");
-		var suffix = suffixGroup.add("edittext",undefined,"_spine");
+		var group, label;
+		group = w.add("group");
+		label = group.add("statictext",undefined,"Spacial Tollerance:");
+		var slider = group.add("slider {minValue: 0, maxValue: 100, value:100}");
+		group.helpTip = label.helpTip = slider.helpTip = "Keep all the way to the right to never create intermediate keyframes.\nSlide all the way left to create a keyframe every frame.\nIterim values set the tolerance for generating keyframes on bezier movement paths.\nKeep an eye on the total number of keyframes output."
+		group = w.add("group");
+		label = group.add("statictext",undefined,"Filename Suffix:");
+		var suffix = group.add("edittext",undefined,"_spine");
 		suffix.characters = 10;
-		var buttons = w.add ("group");
-		buttons.add ("button", undefined, "Export", {name: "ok"});
-		buttons.add ("button", undefined, "Cancel");
+		group = w.add ("group");
+		group.add ("button", undefined, "Export", {name: "ok"});
+		group.add ("button", undefined, "Cancel");
 		if (w.show() != 1) {
-			return;
+			return false;
 		}
-		this.intermediateKeyframes = checkbox.value;
+		this.spatialTolerance = (slider.value == slider.maxValue) ? 999 : ((slider.value/slider.maxValue)/10.0);
 		this.filenameSuffix = suffix.text;
+		return true;
 	}
 
 	AE2JSON.prototype.progress = function(){
@@ -97,12 +105,29 @@
 		this.progressWindow.show();
 	}
 
+	AE2JSON.prototype.showCompleteDialog = function(){
+		var w = new Window("dialog","Export Spine",undefined,{"closeButton":false});
+		w.add("statictext",undefined,this.outputFilename);
+		this.computeStats();
+		w.add("statictext",undefined,"Bones: "+this.totalBones);
+		w.add("statictext",undefined,"Keyframes: "+this.totalKeyframes);
+		w.add ("button", undefined, "OK", {name: "ok"});
+		w.show();
+	}
+
+	AE2JSON.prototype.computeStats = function(){
+		this.totalBones = this.jsonData["bones"].length;
+		this.totalKeyframes = this.countKeyframes( this.jsonData["animations"] );
+	}
+
 	AE2JSON.prototype.initializeCompositions = function(){
 		this.proj = app.project;
 		this.orgTimeDisplayType = this.proj.timeDisplayType;
 		this.proj.timeDisplayType = TimeDisplayType.FRAMES;
 
 		this.numLayers = 0;
+		this.totalBones = 0;
+		this.totalKeyframes = 0;
 		this.masterComp = app.project.activeItem;
 		this.referencedComps = [this.masterComp];
 		this.activeComp = app.project.activeItem.name;
@@ -136,8 +161,6 @@
 		this.jsonData = this.compData[this.activeComp];
 		this.combineCompositions();
 		this.processFlips();
-
-		this.renderJSON(this.saveToFile);
 	}
 
 	AE2JSON.prototype.processFlips = function(boneName){
@@ -619,6 +642,23 @@
 		return true;
 	}
 
+	AE2JSON.prototype.countKeyframes = function(animEntry,count){
+		if (count == undefined) {
+			count = 0;
+		}
+		for (var prop in animEntry) {
+			if (animEntry[prop] instanceof Array ) {
+				var len = animEntry[prop].length;
+				if (len > 0 && animEntry[prop][0].hasOwnProperty("time") ) {
+					count += len;
+				}
+			} else if (animEntry[prop] && typeof animEntry[prop] == "object" ) {
+				count = this.countKeyframes( animEntry[prop], count);
+			}
+		}
+		return count;
+	}
+
 	AE2JSON.prototype.spliceKeyframesEnd = function(animData,index,inPoint,masterDuration,layer,prop) {
 		var len = animData.length;
 		// If there's only 1 keyframe or we'll only be left with one keyframe
@@ -852,16 +892,16 @@
 					layerType = this.checkLayerType(myLayer);
 					switch(layerType){
 						case "NULL":
-							this.jsonData.composition.layers.push(new Null(this.jsonData.composition.compSettings, myLayer));
+							this.jsonData.composition.layers.push(new Null(this.jsonData.composition.compSettings, myLayer, this.spatialTolerance));
 							break;
 						case "AV":
-							this.jsonData.composition.layers.push(new AV(this.jsonData.composition.compSettings, myLayer));
+							this.jsonData.composition.layers.push(new AV(this.jsonData.composition.compSettings, myLayer, this.spatialTolerance));
 							if (myLayer.source instanceof CompItem) {
 								this.referencedComps.push(myLayer.source)
 							}
 							break;
 						case "SHAPE":
-							this.jsonData.composition.layers.push(new ShapeObj(this.jsonData.composition.compSettings, myLayer));
+							this.jsonData.composition.layers.push(new ShapeObj(this.jsonData.composition.compSettings, myLayer, this.spatialTolerance));
 							break;
 						default:
 							this.jsonData.composition.layers.push("unknown "+getObjectClass(myLayer));
@@ -1433,18 +1473,13 @@
 		var path = app.project.file.parent.absoluteURI + "/";
 		var fullPath = path + fileName;
 
-		
-		// this.addMatrixData();
-		// this.jsonData = this.generateBCGAnimationData();
-
 		var jsonString = JSON.stringify(this.jsonData, null, "\t");
 		if (toFile == true) {
-			delete this.jsonData;
 			var jsonExportFile = new File(fullPath);
 			jsonExportFile.open("w");
 			jsonExportFile.write(jsonString);
 			jsonExportFile.close();
-			// alert("Saved "+fullPath);
+			this.outputFilename = fullPath;
 		}
 	}
 
@@ -1465,8 +1500,9 @@
 
 
 
-	function BaseObject(compSettings, layer){
+	function BaseObject(compSettings, layer, spatialTolerance){
 		// Do not store layer, it's too big and can cause a stack overflow
+		this.spatialTolerance = spatialTolerance;
 		this.objData = {};
 		this.beforeDefaults(compSettings, layer);
 		this.setDefaults(compSettings, layer);
@@ -1556,14 +1592,11 @@
 		var frameDuration = this.compSettings.frameDuration;
 		var frameRate = this.compSettings.frameRate;
 		var timeSampleRate = 1.0/(frameRate*1);	//1.0/60.0;
-		var tollerance = 999; // 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes (using 999 to basically disable for now - too many keyframes)
-		if (this.intermediateKeyframes) {
-			tollerance = 1/15.0;
-		}
+		var tolerance = this.spatialTolerance; // 1/15.0;	// <-- Smaller numbers produce more intermediate keyframes (using 999 to basically disable for now - too many keyframes)
 		var timeValues = new Array();
 		if (asKeyframes) {
 			if (prop.numKeys > 1) {
-				if (tollerance == 0) {
+				if (tolerance == 0) {
 					var startFrame = 0; //Number(timeToCurrentFormat(firstKeyTime, frameRate));
 					var endFrame   = Math.floor(duration / frameDuration)-1;	//Number(timeToCurrentFormat(lastKeyTime, frameRate));
 					for(frame = startFrame; frame <= endFrame; frame++){
@@ -1607,7 +1640,7 @@
 										propVal[1] += dy;
 										var interVal = prop.valueAtTime(time, true);
 										var interDist = dist( interVal, propVal );
-										var intollerable = tollerance == 0 || (interDist > distance*tollerance);
+										var intollerable = tolerance == 0 || (interDist > distance*tolerance);
 										if (intollerable) {
 											propVal = interVal.slice(0);	//clone
 											//distance = dist( propVal, nextPropVal );
@@ -1662,8 +1695,8 @@
 
 
 	Null.prototype = Object.create(BaseObject.prototype);
-	function Null(compSettings, layer){
-		BaseObject.call(this, compSettings, layer);
+	function Null(compSettings, layer, spatialTolerance){
+		BaseObject.call(this, compSettings, layer, spatialTolerance);
 		return this.objData;
 	}
 
@@ -1674,8 +1707,8 @@
 
 
 	AV.prototype = Object.create(BaseObject.prototype);
-	function AV(compSettings, layer){
-		BaseObject.call(this, compSettings, layer);
+	function AV(compSettings, layer, spatialTolerance){
+		BaseObject.call(this, compSettings, layer, spatialTolerance);
 		return this.objData;
 	}
 
@@ -1735,8 +1768,8 @@
 
 
 	ShapeObj.prototype = Object.create(BaseObject.prototype);
-	function ShapeObj(compSettings, layer){
-		BaseObject.call(this, compSettings, layer);
+	function ShapeObj(compSettings, layer, spatialTolerance){
+		BaseObject.call(this, compSettings, layer, spatialTolerance);
 		return this.objData;
 	}
 
